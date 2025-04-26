@@ -1,0 +1,64 @@
+.-buttonReset {
+  color: var(--font-color);
+  border: none;
+  background: inherit;
+  background-color: transparent; /* IE 11 */
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+}
+
+.-menuItemFullButton {
+  composes: -buttonReset;
+  transition: color var(--header-transition);
+  width: 100%;
+  user-select: text;
+}
+
+.-menuItemTitle {
+  font-weight: 600;
+}
+
+.container {
+  composes: -menuItemFullButton;
+
+  &:hover {
+    color: var(--header-tint);
+  }
+}
+
+.selected {
+  composes: container;
+  color: var(--header-tint);
+  font-weight: 600;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+}
+
+.name {
+  composes: -menuItemTitle;
+}
+
+.description {
+  padding-left: 2em;
+}
+
+.checkmark {
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+  margin-right: 0.5em;
+}
+
+.selected .checkmark,
+.selected:hover .checkmark {
+  opacity: 1;
+}
+
+.container:hover .checkmark {
+  opacity: 0.5;
+  color: var(--header-tint);
+}

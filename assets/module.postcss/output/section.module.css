@@ -1,0 +1,15 @@
+._-bodyMonospace_1qg95_1 {
+  font-size: inherit;
+  line-height: 1.25;
+
+  /* http://code.stephenmorley.org/html-and-css/fixing-browsers-broken-monospace-font-handling/
+   * ACE uses Monaco, Menlo, "Ubuntu Mono", Consolas, source-code-pro, monospace;
+   */
+  font-family: 'Source Code Pro', monospace;
+  font-optical-sizing: auto;
+}
+
+._code_1qg95_12 {
+}
+
+/*# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJzb3VyY2VzIjpbIi4uLy4uL21vZHVsZS5jc3Mvb3V0cHV0L3NlY3Rpb24ubW9kdWxlLmNzcyJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiQUFBQTtFQUNFLGtCQUFrQjtFQUNsQixpQkFBaUI7O0VBRWpCOztJQUVFO0VBQ0YseUNBQXlDO0VBQ3pDLHlCQUF5QjtBQUMzQjs7QUFFQTtBQUVBIiwiZmlsZSI6InNlY3Rpb24ubW9kdWxlLmNzcyIsInNvdXJjZXNDb250ZW50IjpbIi4tYm9keU1vbm9zcGFjZSB7XG4gIGZvbnQtc2l6ZTogaW5oZXJpdDtcbiAgbGluZS1oZWlnaHQ6IDEuMjU7XG5cbiAgLyogaHR0cDovL2NvZGUuc3RlcGhlbm1vcmxleS5vcmcvaHRtbC1hbmQtY3NzL2ZpeGluZy1icm93c2Vycy1icm9rZW4tbW9ub3NwYWNlLWZvbnQtaGFuZGxpbmcvXG4gICAqIEFDRSB1c2VzIE1vbmFjbywgTWVubG8sIFwiVWJ1bnR1IE1vbm9cIiwgQ29uc29sYXMsIHNvdXJjZS1jb2RlLXBybywgbW9ub3NwYWNlO1xuICAgKi9cbiAgZm9udC1mYW1pbHk6ICdTb3VyY2UgQ29kZSBQcm8nLCBtb25vc3BhY2U7XG4gIGZvbnQtb3B0aWNhbC1zaXppbmc6IGF1dG87XG59XG5cbi5jb2RlIHtcbiAgY29tcG9zZXM6IC1ib2R5TW9ub3NwYWNlO1xufVxuIl19 */

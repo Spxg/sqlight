@@ -1,0 +1,51 @@
+.-buttonReset {
+  color: var(--font-color);
+  border: none;
+  background: inherit;
+  background-color: transparent; /* IE 11 */
+  padding: 0;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+}
+
+.container {
+  display: flex;
+
+  --copied-duration: 1s ease-in-out;
+}
+
+.button {
+  composes: -buttonReset;
+  transition: color var(--copied-duration);
+  cursor: pointer;
+  margin: 0 0.25em 0 0.5em;
+}
+
+.text {
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    visibility var(--copied-duration),
+    opacity var(--copied-duration),
+    color var(--copied-duration);
+}
+
+.active {
+  composes: container;
+
+  & .button {
+    transition: color 0s;
+    color: green;
+  }
+
+  & .text {
+    visibility: visible;
+    opacity: 1;
+    transition:
+      visibility 0s,
+      opacity 0s,
+      color 0s;
+    color: green;
+  }
+}

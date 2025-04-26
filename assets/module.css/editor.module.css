@@ -1,0 +1,42 @@
+.-autoSize {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+}
+
+.-bodyMonospace {
+  font-size: inherit;
+  line-height: 1.25;
+
+  /* http://code.stephenmorley.org/html-and-css/fixing-browsers-broken-monospace-font-handling/
+   * ACE uses Monaco, Menlo, "Ubuntu Mono", Consolas, source-code-pro, monospace;
+   */
+  font-family: 'Source Code Pro', monospace;
+  font-optical-sizing: auto;
+}
+
+.container {
+  composes: -autoSize;
+  position: relative;
+}
+
+.-advanced {
+  composes: -bodyMonospace -autoSize;
+  position: absolute;
+}
+
+.ace {
+  composes: -advanced;
+}
+
+.monaco {
+  composes: -advanced;
+}
+
+.simple {
+  composes: -advanced;
+  border: none;
+  color: inherit;
+  background-color: inherit;
+}

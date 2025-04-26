@@ -1,0 +1,10 @@
+[package]
+name = "split-grid"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = "1.0.219"
+serde-wasm-bindgen = "0.6.5"
+wasm-bindgen = "0.2.100"
+web-sys = "0.3.77"
