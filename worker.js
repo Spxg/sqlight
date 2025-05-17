@@ -916,7 +916,7 @@ function __wbg_get_imports() {
         const ret = makeClosure(arg0, arg1, 83, __wbg_adapter_46);
         return ret;
     };
-    imports.wbg.__wbindgen_closure_wrapper4272 = function(arg0, arg1, arg2) {
+    imports.wbg.__wbindgen_closure_wrapper4270 = function(arg0, arg1, arg2) {
         const ret = makeMutClosure(arg0, arg1, 687, __wbg_adapter_49);
         return ret;
     };
