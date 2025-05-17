@@ -8,7 +8,10 @@ use web_sys::MediaQueryList;
 
 use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult, WorkerHandle};
 
-const DEFAULT_CODE: &str = "SELECT 'Hello World!', datetime('now','localtime') AS current_time;";
+const DEFAULT_CODE: &str = "SELECT 'Hello World!',
+        datetime('now','localtime') AS TM,
+        x'73716c69676874' AS BLOB_VAL,
+        NULL as NULL_VAL;";
 
 #[derive(Store, Serialize, Deserialize)]
 pub struct GlobalState {
