@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult, WorkerHandle};
 
+const DEFAULT_CODE: &str = "SELECT 'Hello World!', datetime('now','localtime') AS current_time;";
+
 #[derive(Store, Serialize, Deserialize)]
 pub struct GlobalState {
     vfs: Vfs,
@@ -40,7 +42,7 @@ impl Default for GlobalState {
     fn default() -> Self {
         Self {
             editor_config: EditorConfig::default(),
-            code: String::new(),
+            code: DEFAULT_CODE.into(),
             focus: None,
             show_something: false,
             orientation: Orientation::Automatic,
