@@ -6,10 +6,11 @@ use web_sys::{Url, UrlSearchParams};
 use crate::{
     PrepareOptions, WorkerRequest,
     app::{
-        button_set::{Button, ButtonSet, Rule},
+        advanced_options_menu::AdvancedOptionsMenu,
+        button_set::{Button, ButtonSet, IconButton, Rule},
         config_menu::ConfigMenu,
         context_menu::ContextMenu,
-        icon::{build_icon, config_icon, expandable_icon},
+        icon::{build_icon, config_icon, expandable_icon, more_options_icon},
         output::change_focus,
         pop_button::PopButton,
         state::{Focus, GlobalState, GlobalStateStoreFields},
@@ -35,6 +36,8 @@ pub fn Header() -> impl IntoView {
                         <VfsMenuButton menu_container=menu_container />
                         <Rule />
                         <ContextMenuButton menu_container=menu_container />
+                        <Rule />
+                        <AdvancedOptionsMenuButton menu_container=menu_container />
                     </ButtonSet>
                 </div>
                 <div class=styles::right>
@@ -53,21 +56,29 @@ pub fn Header() -> impl IntoView {
 
 pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
     Box::new(move || {
-        let Some(code) = state
+        let Some((code, selected_code)) = state
             .editor()
             .read_untracked()
             .as_ref()
-            .map(|editor| editor.get_value())
+            .map(|editor| (editor.get_value(), editor.get_selected_value()))
         else {
             return;
         };
+
+        let run_selected_code = state.run_selected_code().get();
+
         state.code().set(code.clone());
         change_focus(state, Some(Focus::Execute));
         std::mem::take(&mut *state.output().write());
+
         if let Some(worker) = &*state.worker().read_untracked() {
             worker.send_task(WorkerRequest::Prepare(PrepareOptions {
                 id: String::new(),
-                sql: code,
+                sql: if !selected_code.is_empty() && run_selected_code {
+                    selected_code
+                } else {
+                    code
+                },
                 clear_on_prepare: !*state.keep_ctx().read_untracked(),
             }));
             worker.send_task(WorkerRequest::Continue(String::new()));
@@ -152,6 +163,26 @@ fn ConfigMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoVie
         <PopButton
             button=button
             menu=Box::new(|_close| { view! { <ConfigMenu /> }.into_any() })
+            menu_container=menu_container
+        ></PopButton>
+    }
+}
+
+#[component]
+fn AdvancedOptionsMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
+    let button = |toggle, node_ref| {
+        view! {
+            <IconButton on_click=toggle node_ref=node_ref>
+                {more_options_icon()}
+            </IconButton>
+        }
+        .into_any()
+    };
+
+    view! {
+        <PopButton
+            button=button
+            menu=Box::new(|_close| { view! { <AdvancedOptionsMenu /> }.into_any() })
             menu_container=menu_container
         ></PopButton>
     }

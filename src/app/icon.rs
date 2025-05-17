@@ -79,3 +79,17 @@ pub fn clipboard_icon() -> AnyView {
         </svg>
     }.into_any()
 }
+
+pub fn more_options_icon() -> AnyView {
+    view! {
+        <svg
+            class=styles::icon
+            height="18"
+            viewBox="0 0 24 24"
+            width="18"
+            xmlns="http://www.w3.org/2000/svg"
+        >
+            <path d="M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+        </svg>
+    }.into_any()
+}

@@ -18,6 +18,7 @@ pub struct GlobalState {
     theme: Theme,
     keep_ctx: bool,
     code: String,
+    run_selected_code: bool,
     // runtime state below
     #[serde(skip)]
     worker: Option<WorkerHandle>,
@@ -57,6 +58,7 @@ impl Default for GlobalState {
             worker: None,
             editor: None,
             last_error: None,
+            run_selected_code: false,
         }
     }
 }

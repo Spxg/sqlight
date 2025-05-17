@@ -66,3 +66,22 @@ where
 pub fn Rule() -> impl IntoView {
     view! { <span class=styles::rule /> }
 }
+
+#[component]
+pub fn IconButton<C>(
+    #[prop(default = false)] is_small: bool,
+    #[prop(optional)] node_ref: NodeRef<html::element::Button>,
+    on_click: C,
+    children: Children,
+) -> impl IntoView
+where
+    C: FnMut(MouseEvent) + Send + 'static,
+{
+    let style = if is_small { styles::small } else { "" };
+    let style = format!("{} {style}", styles::icon);
+    view! {
+        <button node_ref=node_ref class=style on:click=on_click>
+            {children()}
+        </button>
+    }
+}

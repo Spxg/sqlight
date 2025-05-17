@@ -1,3 +1,4 @@
+mod advanced_options_menu;
 mod button_set;
 mod config_element;
 mod config_menu;
