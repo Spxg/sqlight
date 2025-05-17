@@ -20,6 +20,10 @@ jobs:
       - run: npm install
       - run: npx postcss --dir assets/module.postcss assets/module.css/**/*.css --base assets/module.css
 
+      - name: List postcss
+        run: |
+          ls assets/module.postcss
+
       - uses: cargo-bins/cargo-binstall@main
       - run: cargo binstall trunk
 
