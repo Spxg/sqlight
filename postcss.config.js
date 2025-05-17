@@ -4,11 +4,15 @@ module.exports = {
     require('postcss-preset-env')(),
     require('postcss-mixins')(),
     require("postcss-modules")({
-      getJSON: function(_, json, outputFileName) {
+      getJSON: function(x, json, outputFileName) {
         var path = require("path");
         var fs = require("fs");
-        var jsonFileName = path.resolve(outputFileName + ".map");
-        fs.writeFileSync(jsonFileName, JSON.stringify(json));
+        var jsonPath = path.resolve(outputFileName + ".map");
+        var dir = path.dirname(jsonPath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir);
+        }
+        fs.writeFileSync(jsonPath, JSON.stringify(json));
       },
     }),
     require('cssnano')({
