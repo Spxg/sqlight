@@ -1,7 +1,8 @@
-use aceditor::EditorOptionsBuilder;
+use aceditor::{BindKey, EditorOptionsBuilder};
 use istyles::istyles;
 use leptos::prelude::*;
 use reactive_stores::Store;
+use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::UrlSearchParams;
 
@@ -38,7 +39,21 @@ pub fn Editor() -> impl IntoView {
             .build();
 
         match aceditor::Editor::open("ace_editor", Some(&opt)) {
-            Ok(editor) => state.editor().set(Some(editor)),
+            Ok(editor) => {
+                let exec = Closure::<dyn Fn() + 'static>::new(execute(state));
+                let command = aceditor::Command {
+                    name: "executeCode".into(),
+                    bind_key: BindKey {
+                        win: "Ctrl-Enter".into(),
+                        mac: "Ctrl-Enter|Command-Enter".into(),
+                    },
+                    exec: exec.as_ref().unchecked_ref::<js_sys::Function>().clone(),
+                    read_only: true,
+                };
+                exec.forget();
+                editor.add_command(command);
+                state.editor().set(Some(editor));
+            }
             Err(err) => state
                 .last_error()
                 .set(Some(SQLightError::new_ace_editor(err))),

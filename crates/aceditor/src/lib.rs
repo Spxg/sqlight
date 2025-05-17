@@ -40,6 +40,15 @@ mod bindgen {
         #[wasm_bindgen(method, js_name = getSelectedText)]
         pub fn get_selected_text(this: &Editor) -> String;
     }
+
+    #[wasm_bindgen]
+    extern "C" {
+        pub type CommandManager;
+
+        #[wasm_bindgen(method, js_name = addCommand)]
+        pub fn add_command(this: &CommandManager, command: JsValue);
+
+    }
 }
 
 type Result<T> = std::result::Result<T, EditorError>;
@@ -113,6 +122,22 @@ pub enum EditorError {
     DefineEx(JsValue),
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Command {
+    pub name: String,
+    pub bind_key: BindKey,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub exec: js_sys::Function,
+    pub read_only: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BindKey {
+    pub win: String,
+    pub mac: String,
+}
+
 pub struct Editor {
     js: bindgen::Editor,
 }
@@ -169,6 +194,14 @@ impl Editor {
         callback.forget();
 
         Ok(())
+    }
+
+    pub fn add_command(&self, command: Command) {
+        let editor = self.js.clone();
+        let manager = bindgen::CommandManager::from(
+            Reflect::get(&editor, &JsValue::from("commands")).unwrap(),
+        );
+        manager.add_command(serde_wasm_bindgen::to_value(&command).unwrap());
     }
 
     pub fn get_value(&self) -> String {
