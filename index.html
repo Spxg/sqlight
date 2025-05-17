@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SQLite Playground</title>
+    <meta name="description" content="A SQLite Playground that runs entirely locally" />
+
+    <script src="https://unpkg.com/split-grid/dist/split-grid.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/@floating-ui/core@1.7.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.7.0"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.40.1/ace.min.js" integrity="sha512-yZCW/4uyGQEinu8VJLwUj/w4hXUGuP027EvOt+wLzI0T3v+2o/UhK6L7dwt2QXYOdcnYAS1yheQk6AzNVdlA5A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.40.1/mode-sql.min.js" integrity="sha512-dABa+YCy/MOELLU5BKnJeR/pcORL8icJNR1TBZWrRmlFoWXZEFketX6Qx/DVBkewMZC8mUOGJMJ70fwxcpIDCw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.40.1/theme-gruvbox.min.js" integrity="sha512-csAdQ+MAmg252+rlVpEgxnAzlzPBBEDzi8QSoaMyV1lJqMZuzASQUDyTpT1W2gGqrRLioKPaX0ylDwkMXxzDsw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.40.1/theme-github.min.js" integrity="sha512-6PQOyKN8ulKmC/NQlWnhk2Upjza1Lj9pbYD/6+gNuNG+U28jW/x9iJQJuiQkfQAFggY1sToW9va3vY4xfpsJaA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.41.0/theme-github_dark.min.js" integrity="sha512-9KPSgJ+mukvk+UY25jG7bM1hOR43Sw9jmJxc5q5aa7RAMoQeyY12PNfwwUAPhe9AtOpUA1jKsDRgxeDCXe/uMg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&amp;family=Source+Code+Pro:ital,wght@0,200..900;1,200..900&amp;display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css" integrity="sha512-NhSC1YmyruXifcj/KFRWoC561YpHpc5Jtzgvbuzx5VozKpWvQ+4nXhPdFgmx8xqexRcpAglTj9sIBWINXa8x5w==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+    <link rel="stylesheet" href="/index.module-c01d34afdf78524a.css" integrity="sha384-lRQ7qmLXo5zZTWDlGd7G9oZRaBZZxw8NCDa9rXAonRgQfdMwzameMZMynyjN5x3o"/>
+    <link rel="stylesheet" href="/playground.module-35ee78edbba67fac.css" integrity="sha384-sWwhPrGt5KjDGMGK79VYYCIrKolv16GCWAECkvfu0fi/8CFv6DqWBj2T7Q2A8g0K"/>
+    <link rel="stylesheet" href="/header.module-ac51c18531f057e2.css" integrity="sha384-AXJcnlvV59TxSIsnlrOOqdYQhrXMfDhGTgQLNBEWAJrDnACKot7TRejHMf6J2fnb"/>
+    <link rel="stylesheet" href="/button_set.module-5d3db6de68478263.css" integrity="sha384-TIe5ThZOwLJJ0+6mtvBjL4MarKH9k+DZw4XEyTZR5AdvQ1EtL5U4t9UN/6dQIBBq"/>
+    <link rel="stylesheet" href="/icon.module-1bc61d4168b5ccb3.css" integrity="sha384-ptZCYE08acxN2qaPD7gAPcOIeTItTKiaA1I9NS6kBnqibXsPPgFW36L8SJhtGaDM"/>
+    <link rel="stylesheet" href="/editor.module-3debeca2955ed188.css" integrity="sha384-4YYDPvob82vT6KfK473O3k+pyZqFhJXpp3rm7MUcVYyWamz+BbzKztB7Ov8qo52M"/>
+    <link rel="stylesheet" href="/output.module-a4a1c196d90b7bd9.css" integrity="sha384-jgzSRUt3zKwlwNZ7PWvIF41cnxzf1i1pqj/Di40KsTyjYFWyQGvaFfswHpLiouMJ"/>
+    <link rel="stylesheet" href="/pop_button.module-4f72d3126fbce92f.css" integrity="sha384-M/+7uvtst1jTBIlpkcLyRzEnwDmbU5vy81Mc/C9rALmv7CSEhheO1wf8SFVZgSbE"/>
+    <link rel="stylesheet" href="/menu_group.module-a772dbc7816990dc.css" integrity="sha384-/Vwj3jYZ7voDVUioLY/bPL6evlrD3H94zFOrXqaGLVfWq5j6pGvzlZNsgmF90urx"/>
+    <link rel="stylesheet" href="/menu_item.module-6dd753f9a643aa5d.css" integrity="sha384-6nHT5o64h02Lgj0NnWeFjA2b+BriplzWjqVTxATth/vlEoNAUULsKk+qjGtOspEu"/>
+    <link rel="stylesheet" href="/selectable_menu_item.module-9fcaffb1a28552bd.css" integrity="sha384-Qt+6dKGAA/3lJLyxaO3egtMB3d2cf+891VbURt6e+3HA5lsKGzINrw2jgRgFm4Cy"/>
+    <link rel="stylesheet" href="/loader.module-5ed8421e1bd0b762.css" integrity="sha384-WADDyWyS3McBlbEZF6EHwhvBF6TtFVLo1Ku02jThVPG013QgPFbKV73wPCOajuEG"/>
+    <link rel="stylesheet" href="/config_element.module-82b9972ec45d5c22.css" integrity="sha384-tguuNkgpBUBDvkjnTXJMSgz63AUAf29HHfcXUdkRsDYmJQosQumekxskP4kPA+kv"/>
+
+    <link rel="stylesheet" href="/execute.module-c022a117ac00c250.css" integrity="sha384-a82+iJP4SyJ1M1rs5vfbWLs1o/40EEz88cSvxA9vZu0s6CruMAdTrG4OcwQ/wJti"/>
+    <link rel="stylesheet" href="/header.module-fd412fdcaf14ec7f.css" integrity="sha384-WkHqFfcJ4a2iNggEfDC1FOPjE09nG8bDRcJB/ATap/loWw61KN80coRydss0l1kd"/>
+    <link rel="stylesheet" href="/section.module-563342bb49f45fea.css" integrity="sha384-ODwBBjvfm9KhL/rvz0uzAS1boRM6ejhf5KWkH7aVAKIdcxo5a7PX/M/UMx21xMmg"/>
+    <link rel="stylesheet" href="/share.module-98b6a8e1f8fbcd6d.css" integrity="sha384-wg7LcdSidiM2bt+2SF5mvUvX7QMFNdtd34lSrNMOc/9PTE0Dgp0JNm6iE1My1a7o"/>
+
+    
+<script type="module">
+import init, * as bindings from '/app-c27ded7e54235ec9.js';
+const wasm = await init({ module_or_path: '/app-c27ded7e54235ec9_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    
+  <link rel="modulepreload" href="/app-c27ded7e54235ec9.js" crossorigin="anonymous" integrity="sha384-QmLvx9kcbUVDSDQ1oncPc12gtGIGWaF7RTOfUqdO45QvL6y0j53NAgdJwZiC7vfE"><link rel="modulepreload" href="/snippets/sqlite-wasm-rs-07d3bca508cc6405/src/vfs/utils.js" crossorigin="anonymous" integrity="sha384-O3Tn5WgKg9mHCpDfFO5a31dpbqzX2USLNSznUDUhmdhqj4j/7UkBh0V9GynZBBGU"><link rel="preload" href="/app-c27ded7e54235ec9_bg.wasm" crossorigin="anonymous" integrity="sha384-qfwxxj2PGf3JWGLrlpI7TaozRMgnNrNzZT0aE4rK6igOCMwhr1oEv41gAXVLtV1Y" as="fetch" type="application/wasm"></head>
+  <body></body>
+</html>
