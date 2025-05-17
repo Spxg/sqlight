@@ -23,7 +23,7 @@ pub struct GlobalState {
     #[serde(skip)]
     worker: Option<WorkerHandle>,
     #[serde(skip)]
-    pub editor: Option<Editor>,
+    editor: Option<Editor>,
     #[serde(skip)]
     focus: Option<Focus>,
     #[serde(skip)]
@@ -43,22 +43,22 @@ pub struct GlobalState {
 impl Default for GlobalState {
     fn default() -> Self {
         Self {
+            vfs: Vfs::Memory,
             editor_config: EditorConfig::default(),
-            sql: DEFAULT_CODE.into(),
-            focus: None,
-            show_something: false,
             orientation: Orientation::Automatic,
             theme: Theme::System,
-            output: Vec::new(),
-            vfs: Vfs::Memory,
             keep_ctx: false,
-            share_href: None,
-            is_focused: false,
-            opened_focus: HashSet::new(),
+            sql: DEFAULT_CODE.into(),
+            run_selected_sql: false,
             worker: None,
             editor: None,
+            focus: None,
+            is_focused: false,
+            opened_focus: HashSet::new(),
+            share_href: None,
+            show_something: false,
+            output: Vec::new(),
             last_error: None,
-            run_selected_sql: false,
         }
     }
 }
