@@ -4,7 +4,7 @@ module.exports = {
     require('postcss-preset-env')(),
     require('postcss-mixins')(),
     require("postcss-modules")({
-      getJSON: function(x, json, outputFileName) {
+      getJSON: function(_, json, outputFileName) {
         var path = require("path");
         var fs = require("fs");
         var jsonPath = path.resolve(outputFileName + ".map");

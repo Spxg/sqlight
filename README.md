@@ -16,7 +16,7 @@ Because the layout and component design are derived from it, but rewritten using
 
 ```sh
 npm install
-npx postcss --dir assets/module.postcss assets/module.css/**/*.css --base assets/module.css
+npx postcss --dir assets/module.postcss assets/module.css --base assets/module.css
 # Choose your preferred installation method
 # https://trunkrs.dev/#install
 cargo install trunk --locked

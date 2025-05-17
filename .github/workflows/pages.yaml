@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npx postcss --dir assets/module.postcss assets/module.css/**/*.css --base assets/module.css
+      - run: npx postcss --dir assets/module.postcss assets/module.css --base assets/module.css
 
       - name: List postcss
         run: |
