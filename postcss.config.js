@@ -1,4 +1,4 @@
-module.exports = () => ({
+module.exports = {
   plugins: [
     require('postcss-simple-vars')(),
     require('postcss-preset-env')(),
@@ -11,5 +11,8 @@ module.exports = () => ({
         fs.writeFileSync(jsonFileName, JSON.stringify(json));
       },
     }),
+    require('cssnano')({
+      reset: 'default',
+    }),
   ]
-});
+};

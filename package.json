@@ -1,13 +1,12 @@
 {
-  "dependencies": {
+  "devDependencies": {
+    "cssnano": "^7.0.7",
+    "postcss": "^8.5.3",
+    "postcss-cli": "^11.0.1",
     "postcss-mixins": "^11.0.3",
     "postcss-modules": "^6.0.1",
     "postcss-plugin": "^1.0.0",
     "postcss-preset-env": "^10.1.6",
-    "postcss-simple-vars": "^7.0.1",
-  },
-  "devDependencies": {
-    "postcss": "^8.5.3",
-    "postcss-cli": "^11.0.1"
+    "postcss-simple-vars": "^7.0.1"
   }
 }
