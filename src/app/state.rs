@@ -4,6 +4,7 @@ use aceditor::Editor;
 use leptos::tachys::dom::window;
 use reactive_stores::Store;
 use serde::{Deserialize, Serialize};
+use web_sys::MediaQueryList;
 
 use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult, WorkerHandle};
 
@@ -122,7 +123,7 @@ pub enum Focus {
     Status,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Theme {
     System,
     SystemLight,
@@ -136,7 +137,7 @@ impl Theme {
         matches!(self, Theme::System | Theme::SystemLight | Theme::SystemDark)
     }
 
-    pub fn from_value(s: &str) -> Self {
+    pub fn from_select(s: &str) -> Self {
         match s {
             "System" => Self::System,
             "Light" => Self::Light,
@@ -145,7 +146,30 @@ impl Theme {
         }
     }
 
-    pub fn to_value(&self) -> String {
+    pub fn match_media() -> Option<MediaQueryList> {
+        window()
+            .match_media("(prefers-color-scheme: dark)")
+            .ok()
+            .flatten()
+    }
+
+    pub fn value(&self) -> Self {
+        if *self == Theme::System {
+            Self::match_media()
+                .map(|query| {
+                    if query.matches() {
+                        Theme::SystemDark
+                    } else {
+                        Theme::SystemLight
+                    }
+                })
+                .unwrap_or_else(|| Theme::SystemDark)
+        } else {
+            *self
+        }
+    }
+
+    pub fn select(&self) -> String {
         match self {
             Theme::System | Theme::SystemLight | Theme::SystemDark => "System",
             Theme::Light => "Light",
@@ -155,7 +179,7 @@ impl Theme {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Orientation {
     Automatic,
     AutoHorizontal,
@@ -172,7 +196,7 @@ impl Orientation {
         )
     }
 
-    pub fn from_value(s: &str) -> Self {
+    pub fn from_select(s: &str) -> Self {
         match s {
             "Automatic" => Self::Automatic,
             "Horizontal" => Self::Horizontal,
@@ -181,7 +205,27 @@ impl Orientation {
         }
     }
 
-    pub fn to_value(&self) -> String {
+    pub fn match_media() -> Option<MediaQueryList> {
+        window().match_media("(max-width: 1600px)").ok().flatten()
+    }
+
+    pub fn value(&self) -> Self {
+        if *self == Orientation::Automatic {
+            Self::match_media()
+                .map(|query| {
+                    if query.matches() {
+                        Orientation::AutoHorizontal
+                    } else {
+                        Orientation::AutoVertical
+                    }
+                })
+                .unwrap_or_else(|| Orientation::AutoVertical)
+        } else {
+            *self
+        }
+    }
+
+    pub fn select(&self) -> String {
         match self {
             Orientation::Automatic | Orientation::AutoVertical | Orientation::AutoHorizontal => {
                 "Automatic"

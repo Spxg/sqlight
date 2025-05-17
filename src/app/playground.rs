@@ -74,25 +74,27 @@ fn handle_connect_db(state: Store<GlobalState>) {
     });
 }
 
+fn handle_last_error(state: Store<GlobalState>) {
+    Effect::new(move || {
+        if state.last_error().read().is_some() {
+            change_focus(state, Some(Focus::Status));
+        }
+    });
+}
+
 fn handle_system_theme(state: Store<GlobalState>) {
     Effect::new(move || {
-        let theme = match *state.theme().read() {
-            Theme::System => {
-                if let Ok(Some(query)) = window().match_media("(prefers-color-scheme: dark)") {
-                    if query.matches() { "dark" } else { "light" }
-                } else {
-                    "light"
-                }
-            }
+        let theme = match state.theme().read().value() {
             Theme::SystemLight | Theme::Light => "light",
             Theme::SystemDark | Theme::Dark => "dark",
+            Theme::System => unreachable!(),
         };
         if let Some(element) = document().document_element() {
             element.set_attribute("data-theme", theme).unwrap()
         }
     });
 
-    if let Ok(Some(query)) = window().match_media("(prefers-color-scheme: dark)") {
+    if let Some(query) = Theme::match_media() {
         let f = move |query: web_sys::MediaQueryList| {
             if state.theme().get_untracked().is_system() {
                 state.theme().set(if query.matches() {
@@ -102,7 +104,6 @@ fn handle_system_theme(state: Store<GlobalState>) {
                 });
             }
         };
-        f(query.clone());
         let callback = Closure::<dyn Fn(web_sys::MediaQueryList)>::new(f);
         query
             .add_event_listener_with_callback("change", callback.as_ref().unchecked_ref())
@@ -111,27 +112,28 @@ fn handle_system_theme(state: Store<GlobalState>) {
     }
 }
 
-fn handle_last_error(state: Store<GlobalState>) {
+fn handle_automic_orientation(state: Store<GlobalState>) {
+    let auto_change = move |query: web_sys::MediaQueryList| {
+        if state.orientation().read().is_auto() {
+            let value = if query.matches() {
+                Orientation::AutoHorizontal
+            } else {
+                Orientation::AutoVertical
+            };
+            state
+                .orientation()
+                .maybe_update(|orientation| std::mem::replace(orientation, value) != value);
+        }
+    };
+
     Effect::new(move || {
-        if state.last_error().read().is_some() {
-            change_focus(state, Some(Focus::Status));
+        if let Some(query) = Orientation::match_media() {
+            auto_change(query);
         }
     });
-}
 
-fn handle_automic_orientation(state: Store<GlobalState>) {
-    if let Ok(Some(query)) = window().match_media("(max-width: 1600px)") {
-        let f = move |query: web_sys::MediaQueryList| {
-            if state.orientation().get_untracked().is_auto() {
-                state.orientation().set(if query.matches() {
-                    Orientation::AutoHorizontal
-                } else {
-                    Orientation::AutoVertical
-                });
-            }
-        };
-        f(query.clone());
-        let callback = Closure::<dyn Fn(web_sys::MediaQueryList)>::new(f);
+    if let Some(query) = Orientation::match_media() {
+        let callback = Closure::<dyn Fn(web_sys::MediaQueryList)>::new(auto_change);
         query
             .add_event_listener_with_callback("change", callback.as_ref().unchecked_ref())
             .unwrap();
@@ -142,15 +144,16 @@ fn handle_automic_orientation(state: Store<GlobalState>) {
 fn gird_style() -> String {
     let state = expect_context::<Store<GlobalState>>();
 
-    let (focused_grid_style, unfocused_grid_style) = match *state.orientation().read() {
+    let (focused_grid_style, unfocused_grid_style) = match state.orientation().read().value() {
         Orientation::Horizontal | Orientation::AutoHorizontal => (
             styles::resizeableAreaRowOutputFocused.to_string(),
             styles::resizeableAreaRowOutputUnfocused.to_string(),
         ),
-        Orientation::Automatic | Orientation::Vertical | Orientation::AutoVertical => (
+        Orientation::Vertical | Orientation::AutoVertical => (
             styles::resizeableAreaColumnOutputFocused.to_string(),
             styles::resizeableAreaColumnOutputUnfocused.to_string(),
         ),
+        Orientation::Automatic => unreachable!(),
     };
 
     if state.read().is_focus() {
@@ -163,24 +166,24 @@ fn gird_style() -> String {
 fn handle_outer_style() -> String {
     let state = expect_context::<Store<GlobalState>>();
 
-    match *state.orientation().read() {
+    match state.orientation().read().value() {
         Orientation::Horizontal | Orientation::AutoHorizontal => {
             styles::splitRowsGutter.to_string()
         }
-        Orientation::Automatic | Orientation::Vertical | Orientation::AutoVertical => {
-            styles::splitColumnsGutter.to_string()
-        }
+        Orientation::Vertical | Orientation::AutoVertical => styles::splitColumnsGutter.to_string(),
+        Orientation::Automatic => unreachable!(),
     }
 }
 
 fn handle_inner_style() -> String {
     let state = expect_context::<Store<GlobalState>>();
 
-    match *state.orientation().read() {
+    match state.orientation().read().value() {
         Orientation::Horizontal | Orientation::AutoHorizontal => {
             styles::splitRowsGutterHandle.to_string()
         }
-        Orientation::Automatic | Orientation::Vertical | Orientation::AutoVertical => String::new(),
+        Orientation::Vertical | Orientation::AutoVertical => String::new(),
+        Orientation::Automatic => unreachable!(),
     }
 }
 
@@ -211,19 +214,19 @@ fn ResizableArea() -> impl IntoView {
             JsValue::null()
         };
 
-        let options = match *state.orientation().read() {
+        let options = match state.orientation().read().value() {
             Orientation::Horizontal | Orientation::AutoHorizontal => SplitOptions {
                 min_size: 100,
                 row_gutters: Some(vec![Gutter { track: 1, element }]),
                 column_gutters: None,
             },
-            Orientation::Automatic | Orientation::Vertical | Orientation::AutoVertical => {
-                SplitOptions {
-                    min_size: 100,
-                    row_gutters: None,
-                    column_gutters: Some(vec![Gutter { track: 1, element }]),
-                }
-            }
+            Orientation::Vertical | Orientation::AutoVertical => SplitOptions {
+                min_size: 100,
+                row_gutters: None,
+                column_gutters: Some(vec![Gutter { track: 1, element }]),
+            },
+
+            Orientation::Automatic => unreachable!(),
         };
         let grid = split_grid::split(&options.into());
         on_cleanup(move || grid.destroy());

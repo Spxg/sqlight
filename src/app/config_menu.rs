@@ -65,7 +65,7 @@ pub fn ConfigMenu() -> impl IntoView {
     let theme_change = move |event: Event| {
         if let Some(target) = event.target() {
             let select = HtmlSelectElement::from(JsValue::from(target));
-            state.theme().set(Theme::from_value(&select.value()));
+            state.theme().set(Theme::from_select(&select.value()));
         }
     };
 
@@ -74,7 +74,7 @@ pub fn ConfigMenu() -> impl IntoView {
             let select = HtmlSelectElement::from(JsValue::from(target));
             state
                 .orientation()
-                .set(Orientation::from_value(&select.value()));
+                .set(Orientation::from_select(&select.value()));
         }
     };
 
@@ -103,7 +103,7 @@ pub fn ConfigMenu() -> impl IntoView {
                 {move || {
                     ["System", "Light", "Dark"]
                         .into_iter()
-                        .map(|s| selecet_view(s, &state.theme().read().to_value()))
+                        .map(|s| selecet_view(s, &state.theme().read().select()))
                         .collect_view()
                 }}
             </SelectConfig>
@@ -111,7 +111,7 @@ pub fn ConfigMenu() -> impl IntoView {
                 {move || {
                     ["Automatic", "Horizontal", "Vertical"]
                         .into_iter()
-                        .map(|s| selecet_view(s, &state.orientation().read().to_value()))
+                        .map(|s| selecet_view(s, &state.orientation().read().select()))
                         .collect_view()
                 }}
             </SelectConfig>
