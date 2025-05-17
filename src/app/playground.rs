@@ -95,11 +95,11 @@ fn handle_system_theme(state: Store<GlobalState>) {
     if let Ok(Some(query)) = window().match_media("(prefers-color-scheme: dark)") {
         let f = move |query: web_sys::MediaQueryList| {
             if state.theme().get_untracked().is_system() {
-                *state.theme().write() = if query.matches() {
+                state.theme().set(if query.matches() {
                     Theme::SystemDark
                 } else {
                     Theme::SystemLight
-                };
+                });
             }
         };
         f(query.clone());
@@ -123,11 +123,11 @@ fn handle_automic_orientation(state: Store<GlobalState>) {
     if let Ok(Some(query)) = window().match_media("(max-width: 1600px)") {
         let f = move |query: web_sys::MediaQueryList| {
             if state.orientation().get_untracked().is_auto() {
-                *state.orientation().write() = if query.matches() {
+                state.orientation().set(if query.matches() {
                     Orientation::AutoHorizontal
                 } else {
                     Orientation::AutoVertical
-                };
+                });
             }
         };
         f(query.clone());

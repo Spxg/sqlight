@@ -65,14 +65,16 @@ pub fn ConfigMenu() -> impl IntoView {
     let theme_change = move |event: Event| {
         if let Some(target) = event.target() {
             let select = HtmlSelectElement::from(JsValue::from(target));
-            *state.theme().write() = Theme::from_value(&select.value());
+            state.theme().set(Theme::from_value(&select.value()));
         }
     };
 
     let orientation_change = move |event: Event| {
         if let Some(target) = event.target() {
             let select = HtmlSelectElement::from(JsValue::from(target));
-            *state.orientation().write() = Orientation::from_value(&select.value());
+            state
+                .orientation()
+                .set(Orientation::from_value(&select.value()));
         }
     };
 

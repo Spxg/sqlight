@@ -178,7 +178,7 @@ fn ShareButton() -> impl IntoView {
             url.set_search(&params.to_string().as_string().unwrap());
             Ok(url.href())
         }) {
-            *state.share_href().write() = Some(href);
+            state.share_href().set(Some(href));
             change_focus(state, Some(Focus::Share));
         }
     };

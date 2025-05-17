@@ -16,7 +16,7 @@ pub fn ContextMenu() -> impl IntoView {
                 current_value=move || { *state.keep_ctx().read() }
                 this_value=false
                 change_value=move || {
-                    *state.keep_ctx().write() = false;
+                    state.keep_ctx().set(false);
                 }
             >
                 "Each execution is in a new DB."
@@ -26,7 +26,7 @@ pub fn ContextMenu() -> impl IntoView {
                 current_value=move || { *state.keep_ctx().read() }
                 this_value=true
                 change_value=move || {
-                    *state.keep_ctx().write() = true;
+                    state.keep_ctx().set(true);
                 }
             >
                 "Keep the results of each execution."

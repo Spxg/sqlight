@@ -16,7 +16,7 @@ pub fn VfsMenu() -> impl IntoView {
                 current_value=move || { *state.vfs().read() }
                 this_value=Vfs::Memory
                 change_value=move || {
-                    *state.vfs().write() = Vfs::Memory;
+                    state.vfs().set(Vfs::Memory);
                 }
             >
                 "Data will be lost after refreshing."
@@ -26,7 +26,7 @@ pub fn VfsMenu() -> impl IntoView {
                 current_value=move || { *state.vfs().read() }
                 this_value=Vfs::OPFS
                 change_value=move || {
-                    *state.vfs().write() = Vfs::OPFS;
+                    state.vfs().set(Vfs::OPFS);
                 }
             >
                 "Persistent Storage."
