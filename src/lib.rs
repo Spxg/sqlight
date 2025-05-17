@@ -163,7 +163,7 @@ pub enum SQLitendError {
     OpenDb(InnerError),
     #[error("An error occurred while preparing stmt: {0:?}")]
     Prepare(InnerError),
-    #[error("An error occurred while stepping to the next line")]
+    #[error("An error occurred while stepping to the next line: {0:?}")]
     Step(InnerError),
     #[error("An error occurred while getting column name: {0}")]
     GetColumnName(String),
