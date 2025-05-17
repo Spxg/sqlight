@@ -226,16 +226,16 @@ function debugString(val) {
     // TODO we could test for more things here, like `Set`s and `Map`s.
     return className;
 }
-function __wbg_adapter_46(arg0, arg1, arg2) {
-    wasm.closure82_externref_shim(arg0, arg1, arg2);
+function __wbg_adapter_44(arg0, arg1, arg2) {
+    wasm.closure70_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_49(arg0, arg1, arg2) {
-    wasm.closure686_externref_shim(arg0, arg1, arg2);
+function __wbg_adapter_47(arg0, arg1, arg2) {
+    wasm.closure688_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_238(arg0, arg1, arg2, arg3) {
-    wasm.closure708_externref_shim(arg0, arg1, arg2, arg3);
+function __wbg_adapter_236(arg0, arg1, arg2, arg3) {
+    wasm.closure710_externref_shim(arg0, arg1, arg2, arg3);
 }
 
 const __wbindgen_enum_ReadableStreamType = ["bytes"];
@@ -660,7 +660,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_238(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_236(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -890,10 +890,6 @@ function __wbg_get_imports() {
         const ret = +arg0;
         return ret;
     };
-    imports.wbg.__wbindgen_bigint_from_i64 = function(arg0) {
-        const ret = arg0;
-        return ret;
-    };
     imports.wbg.__wbindgen_bigint_from_u64 = function(arg0) {
         const ret = BigInt.asUintN(64, arg0);
         return ret;
@@ -912,12 +908,12 @@ function __wbg_get_imports() {
         const ret = false;
         return ret;
     };
-    imports.wbg.__wbindgen_closure_wrapper272 = function(arg0, arg1, arg2) {
-        const ret = makeClosure(arg0, arg1, 83, __wbg_adapter_46);
+    imports.wbg.__wbindgen_closure_wrapper262 = function(arg0, arg1, arg2) {
+        const ret = makeClosure(arg0, arg1, 71, __wbg_adapter_44);
         return ret;
     };
-    imports.wbg.__wbindgen_closure_wrapper4270 = function(arg0, arg1, arg2) {
-        const ret = makeMutClosure(arg0, arg1, 687, __wbg_adapter_49);
+    imports.wbg.__wbindgen_closure_wrapper4254 = function(arg0, arg1, arg2) {
+        const ret = makeMutClosure(arg0, arg1, 689, __wbg_adapter_47);
         return ret;
     };
     imports.wbg.__wbindgen_debug_string = function(arg0, arg1) {
