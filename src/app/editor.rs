@@ -3,7 +3,6 @@ use istyles::istyles;
 use leptos::prelude::*;
 use reactive_stores::Store;
 use wasm_bindgen::{JsCast, prelude::Closure};
-use wasm_bindgen_futures::spawn_local;
 use web_sys::UrlSearchParams;
 
 use crate::{
@@ -25,16 +24,20 @@ pub fn Editor() -> impl IntoView {
             let params = UrlSearchParams::new_with_str(&search).ok()?;
             params.get("code")
         };
+
         let opt = EditorOptionsBuilder::default()
             .mode("ace/mode/sql")
             .theme(&format!(
                 "ace/theme/{}",
                 state.editor_config().read_untracked().theme
             ))
-            .keyboard(&format!(
-                "ace/keyboard/{}",
-                state.editor_config().read_untracked().keyboard
-            ))
+            .keyboard(
+                {
+                    let keyboard = &state.editor_config().read_untracked().keyboard;
+                    (keyboard != "ace").then_some(format!("ace/keyboard/{keyboard}"))
+                }
+                .as_deref(),
+            )
             .value(&shared_code().unwrap_or_else(|| state.sql().get_untracked()))
             .build();
 
@@ -59,13 +62,11 @@ pub fn Editor() -> impl IntoView {
                 .set(Some(SQLightError::new_ace_editor(err))),
         }
 
-        spawn_local(async move {
-            if let Err(err) = aceditor::Editor::define_vim_w(execute(state)).await {
-                state
-                    .last_error()
-                    .set(Some(SQLightError::new_ace_editor(err)));
-            }
-        });
+        if let Err(err) = aceditor::Editor::define_vim_w(execute(state)) {
+            state
+                .last_error()
+                .set(Some(SQLightError::new_ace_editor(err)));
+        }
     });
     view! {
         <div class=styles::container>

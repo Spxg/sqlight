@@ -22,7 +22,6 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "thiserror 2.0.12",
- "tokio",
  "wasm-bindgen",
  "web-sys",
 ]

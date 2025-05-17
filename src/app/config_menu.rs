@@ -36,7 +36,9 @@ pub fn ConfigMenu() -> impl IntoView {
             let select = HtmlSelectElement::from(JsValue::from(target));
             state.editor_config().write().keyboard = select.value();
             if let Some(Err(err)) = state.editor().read().as_ref().map(|editor| {
-                editor.set_keyboard_handler(&format!("ace/keyboard/{}", select.value()))
+                let keyboard = select.value();
+                let handler = (keyboard != "ace").then_some(format!("ace/keyboard/{keyboard}"));
+                editor.set_keyboard_handler(handler.as_deref())
             }) {
                 state
                     .last_error()
