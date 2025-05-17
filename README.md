@@ -1,6 +1,6 @@
 # SQLite Playground
 
-A SQLite Playground that runs entirely locally.
+A SQLite Playground that runs completely locally.
 
 ## How it works
 
