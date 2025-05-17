@@ -10,7 +10,7 @@ module.exports = {
         var jsonPath = path.resolve(outputFileName + ".map");
         var dir = path.dirname(jsonPath);
         if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir);
+          fs.mkdirSync(dir, { recursive: true });
         }
         fs.writeFileSync(jsonPath, JSON.stringify(json));
       },
