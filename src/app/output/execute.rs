@@ -19,7 +19,10 @@ fn get_output(table: &SQLiteStatementTable) -> Option<AnyView> {
     };
     Some(
         view! {
-            <table class=styles::table>
+            <table
+                class=styles::table
+                style="table-layout: fixed; width: 100%; word-wrap: break-word;"
+            >
                 <tr>
                     {values
                         .columns

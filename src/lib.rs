@@ -6,7 +6,6 @@ use app::{GlobalState, GlobalStateStoreFields};
 use fragile::Fragile;
 use leptos::prelude::*;
 use reactive_stores::Store;
-use serde_json::Value as JsonValue;
 use std::{
     ops::{Deref, DerefMut},
     sync::Arc,
@@ -152,7 +151,7 @@ pub struct SQLiteStatementTable {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SQLiteStatementValues {
     pub columns: Vec<String>,
-    pub rows: Vec<Vec<JsonValue>>,
+    pub rows: Vec<Vec<String>>,
 }
 
 #[derive(thiserror::Error, Debug, Serialize, Deserialize)]

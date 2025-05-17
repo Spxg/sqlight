@@ -1,4 +1,3 @@
-use serde_json::Value as JsonValue;
 use sqlite_wasm_rs::*;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
@@ -215,12 +214,12 @@ impl SQLitePreparedStatement {
             // https://www.sqlite.org/c3ref/column_blob.html
             let value = unsafe {
                 match column_type {
-                    SQLITE_NULL => JsonValue::Null,
+                    SQLITE_NULL => "Null".to_string(),
                     SQLITE_INTEGER => {
                         let number = sqlite3_column_int64(self.stmt, col_ndx);
-                        JsonValue::from(number)
+                        number.to_string()
                     }
-                    SQLITE_FLOAT => JsonValue::from(sqlite3_column_double(self.stmt, col_ndx)),
+                    SQLITE_FLOAT => sqlite3_column_double(self.stmt, col_ndx).to_string(),
                     SQLITE_TEXT => {
                         let slice = {
                             let text = sqlite3_column_text(self.stmt, col_ndx);
@@ -232,7 +231,7 @@ impl SQLitePreparedStatement {
                         let Ok(text) = std::str::from_utf8(slice) else {
                             return Err(SQLitendError::Utf8Text);
                         };
-                        JsonValue::from(text)
+                        format!("{text:?}")
                     }
                     SQLITE_BLOB => {
                         let slice = {
@@ -240,7 +239,8 @@ impl SQLitePreparedStatement {
                             let len = sqlite3_column_bytes(self.stmt, col_ndx);
                             std::slice::from_raw_parts(blob.cast::<u8>(), len as usize)
                         };
-                        JsonValue::from(slice)
+                        let hex = hex::encode(slice);
+                        format!("x'{hex}'")
                     }
                     _ => return Err(SQLitendError::UnsupportColumnType(column_type)),
                 }
