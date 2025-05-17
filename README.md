@@ -20,5 +20,6 @@ npx postcss --dir assets/module.postcss assets/module.css --base assets/module.c
 # Choose your preferred installation method
 # https://trunkrs.dev/#install
 cargo install trunk --locked
-trunk serve --open
+# The product is in the dist folder
+trunk build --release
 ```
