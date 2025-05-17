@@ -34,7 +34,7 @@ pub fn Editor() -> impl IntoView {
                 "ace/keyboard/{}",
                 state.editor_config().read_untracked().keyboard
             ))
-            .value(&shared_code().unwrap_or_else(|| state.code().get_untracked()))
+            .value(&shared_code().unwrap_or_else(|| state.sql().get_untracked()))
             .build();
 
         match aceditor::Editor::open("ace_editor", Some(&opt)) {

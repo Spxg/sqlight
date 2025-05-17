@@ -9,18 +9,18 @@ use crate::app::{
 pub fn AdvancedOptionsMenu() -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
 
-    let value = move || *state.run_selected_code().read();
-    let is_default = move || !*state.run_selected_code().read();
+    let value = move || *state.run_selected_sql().read();
+    let is_default = move || !*state.run_selected_sql().read();
     let on_change = move |value: &bool| {
-        state.run_selected_code().set(*value);
+        state.run_selected_sql().set(*value);
     };
 
     view! {
         <>
             <MenuGroup title="Advanced options".into()>
                 <Either
-                    id="run_selected_code".into()
-                    name="Run Selected Code".into()
+                    id="run_selected_sql".into()
+                    name="Run Selected SQL".into()
                     a=true
                     b=false
                     a_label=Some("On".to_string())

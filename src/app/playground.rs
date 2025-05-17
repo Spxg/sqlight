@@ -57,8 +57,8 @@ fn hanlde_save_state(state: Store<GlobalState>) {
         state.orientation().track();
         state.theme().track();
         state.keep_ctx().track();
-        state.code().track();
-        state.run_selected_code().track();
+        state.sql().track();
+        state.run_selected_sql().track();
 
         state.read_untracked().save();
     });

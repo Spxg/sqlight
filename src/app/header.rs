@@ -65,9 +65,9 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
             return;
         };
 
-        let run_selected_code = state.run_selected_code().get();
+        let run_selected_code = state.run_selected_sql().get();
 
-        state.code().set(code.clone());
+        state.sql().set(code.clone());
         change_focus(state, Some(Focus::Execute));
         std::mem::take(&mut *state.output().write());
 

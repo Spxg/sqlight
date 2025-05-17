@@ -17,8 +17,8 @@ pub struct GlobalState {
     orientation: Orientation,
     theme: Theme,
     keep_ctx: bool,
-    code: String,
-    run_selected_code: bool,
+    sql: String,
+    run_selected_sql: bool,
     // runtime state below
     #[serde(skip)]
     worker: Option<WorkerHandle>,
@@ -44,7 +44,7 @@ impl Default for GlobalState {
     fn default() -> Self {
         Self {
             editor_config: EditorConfig::default(),
-            code: DEFAULT_CODE.into(),
+            sql: DEFAULT_CODE.into(),
             focus: None,
             show_something: false,
             orientation: Orientation::Automatic,
@@ -58,7 +58,7 @@ impl Default for GlobalState {
             worker: None,
             editor: None,
             last_error: None,
-            run_selected_code: false,
+            run_selected_sql: false,
         }
     }
 }
