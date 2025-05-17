@@ -158,11 +158,11 @@ pub struct SQLiteStatementValues {
 pub enum SQLitendError {
     #[error("An error occurred while converting a string to a CString")]
     ToCStr,
-    #[error("An error occurred while opening the DB: {0:#?}")]
+    #[error("An error occurred while opening the DB: {0:?}")]
     OpenDb(InnerError),
-    #[error("An error occurred while preparing stmt: {0:#?}")]
+    #[error("An error occurred while preparing stmt: {0:?}")]
     Prepare(InnerError),
-    #[error("An error occurred while stepping to the next line: {0:#?}")]
+    #[error("An error occurred while stepping to the next line: {0:?}")]
     Step(InnerError),
     #[error("An error occurred while getting column name: {0}")]
     GetColumnName(String),

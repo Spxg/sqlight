@@ -214,7 +214,7 @@ impl SQLitePreparedStatement {
             // https://www.sqlite.org/c3ref/column_blob.html
             let value = unsafe {
                 match column_type {
-                    SQLITE_NULL => "Null".to_string(),
+                    SQLITE_NULL => "NULL".to_string(),
                     SQLITE_INTEGER => {
                         let number = sqlite3_column_int64(self.stmt, col_ndx);
                         number.to_string()
