@@ -14,7 +14,7 @@ members = [
 
 [dependencies]
 console_error_panic_hook = "0.1.7"
-leptos = { version = "0.8.1", features = ["csr", "nightly"] }
+leptos = { version = "0.8.1", features = ["csr"] }
 sqlite-wasm-rs = { git = "https://github.com/Spxg/sqlite-wasm-rs.git", default-features = false, features = ["precompiled"] }
 istyles = { path = "crates/istyles" }
 aceditor = { path = "crates/aceditor" }

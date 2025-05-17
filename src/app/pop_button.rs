@@ -40,7 +40,7 @@ where
             }
 
             if event.key() == "Escape" {
-                set_open(false);
+                set_open.set(false);
             }
         };
 
@@ -75,7 +75,7 @@ where
                         .as_ref()
                         .is_some_and(|floating| floating.deref().contains(node.as_ref()))
                 }) {
-                    set_open(false);
+                    set_open.set(false);
                 }
             }
         };
@@ -183,7 +183,7 @@ where
     let float = move || {
         let menu_clone = Arc::clone(&menu);
         view! {
-            <Show when=is_open fallback=|| ()>
+            <Show when=move || is_open.get() fallback=|| ()>
                 <div
                     class=styles::container
                     node_ref=floating_ref
