@@ -29,13 +29,18 @@ async fn execute_task(scope: DedicatedWorkerGlobalScope, mut rx: UnboundedReceiv
         let request = serde_wasm_bindgen::from_value::<WorkerRequest>(request).unwrap();
         let resp = match request {
             WorkerRequest::Open(options) => WorkerResponse::Open(worker::open(options).await),
-            WorkerRequest::Prepare(options) => WorkerResponse::Prepare(worker::prepare(options)),
+            WorkerRequest::Prepare(options) => {
+                WorkerResponse::Prepare(worker::prepare(options).await)
+            }
             WorkerRequest::Continue(id) => WorkerResponse::Continue(worker::r#continue(&id)),
             WorkerRequest::StepOver(id) => WorkerResponse::StepOver(worker::step_over(&id)),
             WorkerRequest::StepIn(id) => WorkerResponse::StepIn(worker::step_in(&id)),
             WorkerRequest::StepOut(id) => WorkerResponse::StepOut(worker::step_out(&id)),
             WorkerRequest::LoadDb(options) => {
                 WorkerResponse::LoadDb(worker::load_db(options).await)
+            }
+            WorkerRequest::DownloadDb(options) => {
+                WorkerResponse::DownloadDb(worker::download_db(options).await)
             }
         };
         if let Err(err) = scope.post_message(&serde_wasm_bindgen::to_value(&resp).unwrap()) {

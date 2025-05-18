@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use aceditor::Editor;
+use js_sys::Uint8Array;
 use leptos::tachys::dom::window;
 use reactive_stores::Store;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,8 @@ pub struct GlobalState {
     last_error: Option<FragileComfirmed<SQLightError>>,
     #[serde(skip)]
     import_progress: Option<ImportProgress>,
+    #[serde(skip)]
+    exported: Option<Exported>,
 }
 
 impl Default for GlobalState {
@@ -65,6 +68,7 @@ impl Default for GlobalState {
             output: Vec::new(),
             last_error: None,
             import_progress: None,
+            exported: None,
         }
     }
 }
@@ -92,6 +96,11 @@ pub struct ImportProgress {
     pub filename: String,
     pub loaded: f64,
     pub total: f64,
+}
+
+pub struct Exported {
+    pub filename: String,
+    pub data: FragileComfirmed<Uint8Array>,
 }
 
 #[derive(Serialize, Deserialize)]

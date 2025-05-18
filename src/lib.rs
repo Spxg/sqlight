@@ -2,7 +2,7 @@ pub mod app;
 pub mod worker;
 
 use aceditor::EditorError;
-use app::{GlobalState, GlobalStateStoreFields};
+use app::{Exported, GlobalState, GlobalStateStoreFields};
 use fragile::Fragile;
 use js_sys::Uint8Array;
 use leptos::prelude::*;
@@ -83,8 +83,10 @@ pub enum WorkerError {
     InvaildState,
     #[error("OPFS already opened")]
     OpfsSAHPoolOpened,
-    #[error("Failed to import db: {0}")]
+    #[error("Failed to load db: {0}")]
     LoadDb(String),
+    #[error("Failed to download db: {0}")]
+    DownloadDb(String),
     #[error("Unexpected error")]
     Unexpected,
 }
@@ -98,6 +100,7 @@ pub enum WorkerRequest {
     StepIn(String),
     StepOut(String),
     LoadDb(LoadDbOptions),
+    DownloadDb(DownloadDbOptions),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,6 +113,14 @@ pub enum WorkerResponse {
     StepIn(Result<()>),
     StepOut(Result<SQLiteStatementResult>),
     LoadDb(Result<()>),
+    DownloadDb(Result<DownloadDbResponse>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DownloadDbResponse {
+    filename: String,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    data: Uint8Array,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -121,9 +132,13 @@ pub struct OpenOptions {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoadDbOptions {
     pub id: String,
-    pub persist: bool,
     #[serde(with = "serde_wasm_bindgen::preserve")]
     pub data: Uint8Array,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DownloadDbOptions {
+    pub id: String,
 }
 
 impl OpenOptions {
@@ -263,6 +278,17 @@ pub async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<W
                     .keep_ctx()
                     .maybe_update(|keep| std::mem::replace(keep, keep_ctx) != keep_ctx);
             }
+            WorkerResponse::DownloadDb(result) => match result {
+                Ok(resp) => {
+                    state.exported().set(Some(Exported {
+                        filename: resp.filename,
+                        data: FragileComfirmed::new(resp.data),
+                    }));
+                }
+                Err(err) => {
+                    state.last_error().set(Some(SQLightError::new_worker(err)));
+                }
+            },
         }
     }
 }

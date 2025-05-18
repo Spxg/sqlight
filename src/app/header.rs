@@ -2,12 +2,13 @@ use istyles::istyles;
 use leptos::{html::Input, prelude::*, tachys::html};
 use reactive_stores::Store;
 use wasm_bindgen::{JsCast, prelude::Closure};
-use web_sys::{Event, FileReader, HtmlInputElement, Url, UrlSearchParams};
+use web_sys::{Blob, Event, FileReader, HtmlInputElement, Url, UrlSearchParams};
 
 use crate::{
-    FragileComfirmed, LoadDbOptions, PrepareOptions, SQLightError, WorkerRequest,
+    DownloadDbOptions, FragileComfirmed, LoadDbOptions, PrepareOptions, SQLightError,
+    WorkerRequest,
     app::{
-        ImportProgress, Vfs,
+        ImportProgress,
         advanced_options_menu::AdvancedOptionsMenu,
         button_set::{Button, ButtonSet, IconButton, Rule},
         config_menu::ConfigMenu,
@@ -48,6 +49,8 @@ pub fn Header() -> impl IntoView {
                     <input type="file" node_ref=input_ref style="display: none" />
                     <ButtonSet>
                         <LoadButton input_ref=input_ref />
+                        <Rule />
+                        <DownloadButton />
                     </ButtonSet>
                     <ButtonSet>
                         <ShareButton />
@@ -108,6 +111,47 @@ fn ExecuteButton() -> impl IntoView {
 }
 
 #[component]
+fn DownloadButton() -> impl IntoView {
+    let state = expect_context::<Store<GlobalState>>();
+
+    Effect::new(move || {
+        state.exported().track();
+
+        let Some(downloaded) = state.exported().write_untracked().take() else {
+            return;
+        };
+        let filename = downloaded.filename;
+        let buffer = downloaded.data;
+        let blob = Blob::new_with_u8_array_sequence(&js_sys::Array::from(&buffer)).unwrap();
+        let url = Url::create_object_url_with_blob(&blob).unwrap();
+
+        let document = document();
+        let a = document
+            .create_element("a")
+            .unwrap()
+            .dyn_into::<web_sys::HtmlAnchorElement>()
+            .unwrap();
+
+        a.set_href(&url);
+        a.set_download(&filename);
+        a.click();
+
+        Url::revoke_object_url(&url).unwrap();
+    });
+
+    let on_click = move |_| {
+        if let Some(worker) = &*state.worker().read() {
+            worker.send_task(WorkerRequest::DownloadDb(DownloadDbOptions {
+                // FIXME: multi db
+                id: String::new(),
+            }));
+        }
+    };
+
+    view! { <Button on_click=on_click>"Download DB"</Button> }
+}
+
+#[component]
 fn LoadButton(input_ref: NodeRef<Input>) -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
 
@@ -152,12 +196,10 @@ fn LoadButton(input_ref: NodeRef<Input>) -> impl IntoView {
                             if let Ok(result) = reader.result() {
                                 let array_buffer = result.unchecked_into::<js_sys::ArrayBuffer>();
                                 let data = js_sys::Uint8Array::new(&array_buffer);
-                                let persist = state.vfs().get() != Vfs::Memory;
                                 if let Some(worker) = &*state.worker().read() {
                                     worker.send_task(WorkerRequest::LoadDb(LoadDbOptions {
                                         // FIXME: multi db
                                         id: String::new(),
-                                        persist,
                                         data,
                                     }));
                                 }

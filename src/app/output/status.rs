@@ -51,6 +51,7 @@ pub fn Status() -> impl IntoView {
                     WorkerError::LoadDb(_) => {
                         "Please check whether the imported DB is a SQLite3 file"
                     }
+                    WorkerError::DownloadDb(_) => "It may be caused by OOM",
                     WorkerError::OpfsSAHPoolOpened => OPFS_SAH_POOL_OPENED_DETAILS,
                 },
                 SQLightError::AceEditor(ace_editor) => match ace_editor {

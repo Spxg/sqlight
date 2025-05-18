@@ -1,14 +1,15 @@
 mod sqlitend;
 
 use crate::{
-    LoadDbOptions, OpenOptions, PERSIST_VFS, PrepareOptions, SQLiteStatementResult, WorkerError,
+    DownloadDbOptions, DownloadDbResponse, LoadDbOptions, OpenOptions, PERSIST_VFS, PrepareOptions,
+    SQLiteStatementResult, WorkerError,
 };
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use sqlite_wasm_rs::{
     export::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil},
     mem_vfs::MemVfsUtil,
-    utils::copy_to_vec,
+    utils::{copy_to_uint8_array, copy_to_vec},
 };
 use sqlitend::{SQLiteDb, SQLitePreparedStatement, SQLiteStatements};
 use std::{collections::HashMap, sync::Arc};
@@ -72,24 +73,45 @@ async fn opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
         .await
 }
 
+pub async fn download_db(options: DownloadDbOptions) -> Result<DownloadDbResponse> {
+    let opfs = opfs_util().await?;
+    let mem_vfs = &FS_UTIL.mem;
+
+    with_worker(&options.id, |worker| {
+        let filename = &worker.open_options.filename;
+        let db = if worker.open_options.persist {
+            opfs.export_file(filename)
+                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))?
+        } else {
+            mem_vfs
+                .export_db(filename)
+                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))?
+        };
+        Ok(DownloadDbResponse {
+            filename: worker.open_options.filename.clone(),
+            data: copy_to_uint8_array(&db),
+        })
+    })
+}
+
 pub async fn load_db(options: LoadDbOptions) -> Result<()> {
     let db = copy_to_vec(&options.data);
+
+    let opfs = opfs_util().await?;
+    let mem_vfs = &FS_UTIL.mem;
+
     with_worker(&options.id, |worker| {
         worker.db.take();
 
         let filename = &worker.open_options.filename;
-        let FSUtil { mem, opfs } = &*FS_UTIL;
         if worker.open_options.persist {
-            if let Some(opfs) = opfs.get() {
-                opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
-
-                if let Err(err) = opfs.import_db(filename, &db) {
-                    return Err(WorkerError::LoadDb(format!("{err}")));
-                }
+            opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
+            if let Err(err) = opfs.import_db(filename, &db) {
+                return Err(WorkerError::LoadDb(format!("{err}")));
             }
         } else {
-            mem.delete_db(filename);
-            if let Err(err) = mem.import_db(filename, &db) {
+            mem_vfs.delete_db(filename);
+            if let Err(err) = mem_vfs.import_db(filename, &db) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
             }
         }
@@ -125,19 +147,19 @@ pub async fn open(options: OpenOptions) -> Result<String> {
     Ok(id)
 }
 
-pub fn prepare(options: PrepareOptions) -> Result<()> {
+pub async fn prepare(options: PrepareOptions) -> Result<()> {
+    let opfs = opfs_util().await?;
+    let mem_vfs = &FS_UTIL.mem;
+
     with_worker(&options.id, |worker| {
         if options.clear_on_prepare {
             worker.db.take();
 
             let filename = &worker.open_options.filename;
-            let FSUtil { mem, opfs } = &*FS_UTIL;
             if worker.open_options.persist {
-                if let Some(opfs) = opfs.get() {
-                    opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
-                }
+                opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
             } else {
-                mem.delete_db(filename);
+                mem_vfs.delete_db(filename);
             }
 
             worker.db = Some(SQLiteDb::open(&worker.open_options.uri())?);
