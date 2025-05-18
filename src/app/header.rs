@@ -172,6 +172,7 @@ fn LoadButton(input_ref: NodeRef<Input>) -> impl IntoView {
                                 filename: filename.clone(),
                                 loaded: ev.loaded(),
                                 total: ev.total(),
+                                opened: None,
                             }));
                         }
                     },

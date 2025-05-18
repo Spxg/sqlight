@@ -107,6 +107,7 @@ pub struct ImportProgress {
     pub filename: String,
     pub loaded: f64,
     pub total: f64,
+    pub opened: Option<bool>,
 }
 
 pub struct Exported {

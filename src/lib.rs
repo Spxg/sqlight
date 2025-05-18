@@ -273,6 +273,9 @@ pub async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<W
             | WorkerResponse::StepOut(_) => unimplemented!(),
             WorkerResponse::LoadDb(result) => {
                 let keep_ctx = result.is_ok();
+                if let Some(progress) = &mut *state.import_progress().write() {
+                    progress.opened = Some(keep_ctx);
+                }
                 if let Err(err) = result {
                     state.last_error().set(Some(SQLightError::new_worker(err)));
                 }
