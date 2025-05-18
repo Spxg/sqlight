@@ -122,7 +122,10 @@ fn DownloadButton() -> impl IntoView {
         };
         let filename = downloaded.filename;
         let buffer = downloaded.data;
-        let blob = Blob::new_with_u8_array_sequence(&js_sys::Array::from(&buffer)).unwrap();
+        let array = js_sys::Array::new();
+        array.push(&buffer);
+
+        let blob = Blob::new_with_u8_array_sequence(&array).unwrap();
         let url = Url::create_object_url_with_blob(&blob).unwrap();
 
         let document = document();
