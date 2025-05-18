@@ -106,14 +106,16 @@ pub struct Exported {
 #[derive(Serialize, Deserialize)]
 pub struct EditorConfig {
     pub keyboard: String,
-    pub theme: String,
+    pub light_theme: String,
+    pub dark_theme: String,
 }
 
 impl Default for EditorConfig {
     fn default() -> Self {
         EditorConfig {
             keyboard: "ace".into(),
-            theme: "github".into(),
+            light_theme: "github".into(),
+            dark_theme: "github_dark".into(),
         }
     }
 }
@@ -186,7 +188,7 @@ impl Theme {
                         Theme::SystemLight
                     }
                 })
-                .unwrap_or_else(|| Theme::SystemDark)
+                .unwrap_or_else(|| Theme::SystemLight)
         } else {
             *self
         }

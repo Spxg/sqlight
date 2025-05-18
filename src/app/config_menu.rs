@@ -3,16 +3,20 @@ use reactive_stores::Store;
 use wasm_bindgen::JsValue;
 use web_sys::{Event, HtmlSelectElement};
 
-use crate::{
-    SQLightError,
-    app::{
-        GlobalState, GlobalStateStoreFields, Orientation, Theme,
-        config_element::Select as SelectConfig, menu_group::MenuGroup,
-    },
+use crate::app::{
+    GlobalState, GlobalStateStoreFields, Orientation, Theme,
+    config_element::Select as SelectConfig, menu_group::MenuGroup,
 };
 
 const ACE_KEYBOARDS: [&str; 5] = ["ace", "emacs", "sublime", "vim", "vscode"];
-const ACE_THEMES: [&str; 3] = ["github", "github_dark", "gruvbox"];
+const ACE_THEMES: [&str; 6] = [
+    "github",
+    "github_dark",
+    "github_light_default",
+    "gruvbox",
+    "gruvbox_light_hard",
+    "gruvbox_dark_hard",
+];
 
 fn selecet_view(s: &str, selected: &str) -> AnyView {
     if s == selected {
@@ -35,32 +39,20 @@ pub fn ConfigMenu() -> impl IntoView {
         if let Some(target) = event.target() {
             let select = HtmlSelectElement::from(JsValue::from(target));
             state.editor_config().write().keyboard = select.value();
-            if let Some(Err(err)) = state.editor().read().as_ref().map(|editor| {
-                let keyboard = select.value();
-                let handler = (keyboard != "ace").then_some(format!("ace/keyboard/{keyboard}"));
-                editor.set_keyboard_handler(handler.as_deref())
-            }) {
-                state
-                    .last_error()
-                    .set(Some(SQLightError::new_ace_editor(err)));
-            }
         }
     };
 
-    let ace_theme_change = move |event: Event| {
+    let light_ace_theme_change = move |event: Event| {
         if let Some(target) = event.target() {
             let select = HtmlSelectElement::from(JsValue::from(target));
-            state.editor_config().write().theme = select.value();
-            if let Some(Err(err)) = state
-                .editor()
-                .read()
-                .as_ref()
-                .map(|editor| editor.set_theme(&format!("ace/theme/{}", select.value())))
-            {
-                state
-                    .last_error()
-                    .set(Some(SQLightError::new_ace_editor(err)));
-            }
+            state.editor_config().write().light_theme = select.value();
+        }
+    };
+
+    let dark_ace_theme_change = move |event: Event| {
+        if let Some(target) = event.target() {
+            let select = HtmlSelectElement::from(JsValue::from(target));
+            state.editor_config().write().dark_theme = select.value();
         }
     };
 
@@ -90,11 +82,19 @@ pub fn ConfigMenu() -> impl IntoView {
                         .collect_view()
                 }}
             </SelectConfig>
-            <SelectConfig name="Theme".into() on_change=ace_theme_change>
+            <SelectConfig name="Light Theme".into() on_change=light_ace_theme_change>
                 {move || {
                     ACE_THEMES
                         .into_iter()
-                        .map(|s| selecet_view(s, &state.editor_config().read().theme))
+                        .map(|s| selecet_view(s, &state.editor_config().read().light_theme))
+                        .collect_view()
+                }}
+            </SelectConfig>
+            <SelectConfig name="Dark Theme".into() on_change=dark_ace_theme_change>
+                {move || {
+                    ACE_THEMES
+                        .into_iter()
+                        .map(|s| selecet_view(s, &state.editor_config().read().dark_theme))
                         .collect_view()
                 }}
             </SelectConfig>

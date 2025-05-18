@@ -29,7 +29,7 @@ pub fn Editor() -> impl IntoView {
             .mode("ace/mode/sql")
             .theme(&format!(
                 "ace/theme/{}",
-                state.editor_config().read_untracked().theme
+                state.editor_config().read_untracked().light_theme
             ))
             .keyboard(
                 {

@@ -10,12 +10,15 @@ use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::wasm_bindgen::JsValue;
 
-use crate::app::{
-    Focus,
-    editor::Editor,
-    header::Header,
-    output::{Output, change_focus},
-    state::{GlobalState, GlobalStateStoreFields, Orientation, Theme, Vfs},
+use crate::{
+    SQLightError,
+    app::{
+        Focus,
+        editor::Editor,
+        header::Header,
+        output::{Output, change_focus},
+        state::{GlobalState, GlobalStateStoreFields, Orientation, Theme, Vfs},
+    },
 };
 use crate::{WorkerHandle, WorkerResponse, handle_state};
 
@@ -36,8 +39,9 @@ pub fn playground(
         handle_system_theme(state);
         handle_automic_orientation(state);
         handle_connect_db(state);
-        hanlde_save_state(state);
+        handle_save_state(state);
         handle_import_progress(state);
+        handle_ace_config(state);
 
         spawn_local(handle_state(state, rx));
 
@@ -51,7 +55,39 @@ pub fn playground(
     })
 }
 
-fn hanlde_save_state(state: Store<GlobalState>) {
+fn handle_ace_config(state: Store<GlobalState>) {
+    Effect::new(move || {
+        let config = state.editor_config().read();
+        let keyboard = &config.keyboard;
+        let theme = match state.theme().read().value() {
+            Theme::SystemLight | Theme::Light => &config.light_theme,
+            Theme::SystemDark | Theme::Dark => &config.dark_theme,
+            Theme::System => unreachable!(),
+        };
+
+        if let Some(Err(err)) = state.editor().read().as_ref().map(|editor| {
+            let handler = (keyboard != "ace").then_some(format!("ace/keyboard/{keyboard}"));
+            editor.set_keyboard_handler(handler.as_deref())
+        }) {
+            state
+                .last_error()
+                .set(Some(SQLightError::new_ace_editor(err)));
+        }
+
+        if let Some(Err(err)) = state
+            .editor()
+            .read()
+            .as_ref()
+            .map(|editor| editor.set_theme(&format!("ace/theme/{theme}")))
+        {
+            state
+                .last_error()
+                .set(Some(SQLightError::new_ace_editor(err)));
+        }
+    });
+}
+
+fn handle_save_state(state: Store<GlobalState>) {
     Effect::new(move || {
         state.vfs().track();
         state.editor_config().track();
