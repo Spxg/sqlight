@@ -54,7 +54,7 @@ where
     f(DB_POOL.lock().get_mut(id).ok_or(WorkerError::NotFound)?)
 }
 
-async fn opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
+async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
     FS_UTIL
         .opfs
         .get_or_try_init(|| async {
@@ -73,16 +73,19 @@ async fn opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
         .await
 }
 
-pub async fn download_db(options: DownloadDbOptions) -> Result<DownloadDbResponse> {
-    let opfs = opfs_util().await?;
-    let mem_vfs = &FS_UTIL.mem;
+fn get_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
+    FS_UTIL.opfs.get().ok_or(WorkerError::Unexpected)
+}
 
+pub async fn download_db(options: DownloadDbOptions) -> Result<DownloadDbResponse> {
     with_worker(&options.id, |worker| {
         let filename = &worker.open_options.filename;
         let db = if worker.open_options.persist {
-            opfs.export_file(filename)
+            get_opfs_util()?
+                .export_file(filename)
                 .map_err(|err| WorkerError::DownloadDb(format!("{err}")))?
         } else {
+            let mem_vfs = &FS_UTIL.mem;
             mem_vfs
                 .export_db(filename)
                 .map_err(|err| WorkerError::DownloadDb(format!("{err}")))?
@@ -97,19 +100,18 @@ pub async fn download_db(options: DownloadDbOptions) -> Result<DownloadDbRespons
 pub async fn load_db(options: LoadDbOptions) -> Result<()> {
     let db = copy_to_vec(&options.data);
 
-    let opfs = opfs_util().await?;
-    let mem_vfs = &FS_UTIL.mem;
-
     with_worker(&options.id, |worker| {
         worker.db.take();
 
         let filename = &worker.open_options.filename;
         if worker.open_options.persist {
+            let opfs = get_opfs_util()?;
             opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
             if let Err(err) = opfs.import_db(filename, &db) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
             }
         } else {
+            let mem_vfs = &FS_UTIL.mem;
             mem_vfs.delete_db(filename);
             if let Err(err) = mem_vfs.import_db(filename, &db) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
@@ -127,7 +129,7 @@ pub async fn open(options: OpenOptions) -> Result<String> {
         return Ok(worker.id.clone());
     }
     if options.persist {
-        let util = opfs_util().await?;
+        let util = init_opfs_util().await?;
         if util.get_capacity() - util.get_file_count() * 3 < 3 {
             util.add_capacity(3)
                 .await
@@ -148,17 +150,17 @@ pub async fn open(options: OpenOptions) -> Result<String> {
 }
 
 pub async fn prepare(options: PrepareOptions) -> Result<()> {
-    let opfs = opfs_util().await?;
-    let mem_vfs = &FS_UTIL.mem;
-
     with_worker(&options.id, |worker| {
         if options.clear_on_prepare {
             worker.db.take();
 
             let filename = &worker.open_options.filename;
             if worker.open_options.persist {
-                opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
+                get_opfs_util()?
+                    .unlink(filename)
+                    .map_err(|_| WorkerError::Unexpected)?;
             } else {
+                let mem_vfs = &FS_UTIL.mem;
                 mem_vfs.delete_db(filename);
             }
 
