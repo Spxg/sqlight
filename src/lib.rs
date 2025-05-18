@@ -251,6 +251,8 @@ pub async fn setup_worker() -> (WorkerHandle, UnboundedReceiver<WorkerResponse>)
 
 pub async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<WorkerResponse>) {
     while let Some(resp) = rx.recv().await {
+        state.last_error().set(None);
+
         match resp {
             WorkerResponse::Ready => unreachable!(),
             WorkerResponse::Open(result) => match result {
