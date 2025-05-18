@@ -14,8 +14,12 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.40.1/mode-sql.min.js" integrity="sha512-dABa+YCy/MOELLU5BKnJeR/pcORL8icJNR1TBZWrRmlFoWXZEFketX6Qx/DVBkewMZC8mUOGJMJ70fwxcpIDCw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.40.1/theme-gruvbox.min.js" integrity="sha512-csAdQ+MAmg252+rlVpEgxnAzlzPBBEDzi8QSoaMyV1lJqMZuzASQUDyTpT1W2gGqrRLioKPaX0ylDwkMXxzDsw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.41.0/theme-gruvbox_dark_hard.min.js" integrity="sha512-vtJVpEfWpayOCztM++zcJm9pVjyjRKsw4Uc33y3H26ckYKPZthtxhrs4wWCuTDM1uzYbPfS8Llj41Q/71porvg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.41.0/theme-gruvbox_light_hard.min.js" integrity="sha512-qhIXgTDFC22ff43cO+ufdivWukgjh1pAZRsaqNhwHxiDMk6U8v80MkSmi5zqr+eUdDyLQ83V2xDF1qHO3rueNQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.40.1/theme-github.min.js" integrity="sha512-6PQOyKN8ulKmC/NQlWnhk2Upjza1Lj9pbYD/6+gNuNG+U28jW/x9iJQJuiQkfQAFggY1sToW9va3vY4xfpsJaA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.41.0/theme-github_dark.min.js" integrity="sha512-9KPSgJ+mukvk+UY25jG7bM1hOR43Sw9jmJxc5q5aa7RAMoQeyY12PNfwwUAPhe9AtOpUA1jKsDRgxeDCXe/uMg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.41.0/theme-github_light_default.min.js" integrity="sha512-VrddWqOESYVik5j3t1Do96tsvOAP1OqhRAK5wKHD6pE6BMBbtb1VnVr2MJT4/qtk25DMMcU8kcfLqJWt5YBY+g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.41.0/keybinding-emacs.min.js" integrity="sha512-1we+ZK71T6DaWp6q4BJy19k434OD9bA5Og0UfzbTYJSH/uudpJGyutzmySWFpaa9t4D6mQV+EqZSzZjuSMcWRA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.41.0/keybinding-sublime.min.js" integrity="sha512-w/39STWW/Z1LblB2XwmGduzCcCPEL1HUi220daoSjYw4d/XsSzSQm+2no518nufpy5mKKTChZ50oQ9YQE/zDNg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -49,8 +53,8 @@
 
     
 <script type="module">
-import init, * as bindings from '/app-cd51a317c4c47c82.js';
-const wasm = await init({ module_or_path: '/app-cd51a317c4c47c82_bg.wasm' });
+import init, * as bindings from '/app-ee0dc7d6ba531d7e.js';
+const wasm = await init({ module_or_path: '/app-ee0dc7d6ba531d7e_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -60,6 +64,6 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
     
-  <link rel="modulepreload" href="/app-cd51a317c4c47c82.js" crossorigin="anonymous" integrity="sha384-FyR+QRPNghDuE5AHPRHKiQK88OOVfZpRZR/Uhr1JjfGg0od8Utf+VZxXtqoRgenk"><link rel="modulepreload" href="/snippets/sqlite-wasm-rs-07d3bca508cc6405/src/vfs/utils.js" crossorigin="anonymous" integrity="sha384-O3Tn5WgKg9mHCpDfFO5a31dpbqzX2USLNSznUDUhmdhqj4j/7UkBh0V9GynZBBGU"><link rel="preload" href="/app-cd51a317c4c47c82_bg.wasm" crossorigin="anonymous" integrity="sha384-++COf5g3tjC3QCMoRCi5jIlk4L0sEx2U7qCE/hN+HNqP49NnO5OkDNvjv64Ci+8/" as="fetch" type="application/wasm"></head>
+  <link rel="modulepreload" href="/app-ee0dc7d6ba531d7e.js" crossorigin="anonymous" integrity="sha384-+SF334lOeklFUzhUMrhZsYJbjV/ucbljDosihaQlGlSWher1xVZJ+G1dfGxj2Om6"><link rel="modulepreload" href="/snippets/sqlite-wasm-rs-7363ec544fce135b/src/vfs/utils.js" crossorigin="anonymous" integrity="sha384-O3Tn5WgKg9mHCpDfFO5a31dpbqzX2USLNSznUDUhmdhqj4j/7UkBh0V9GynZBBGU"><link rel="preload" href="/app-ee0dc7d6ba531d7e_bg.wasm" crossorigin="anonymous" integrity="sha384-Rx41MtKOd4VWAoGCaGtp2RSBQMHF8HYcUwrNl1AFRXEaYw1vE2V4IGGLA3ZQhzDZ" as="fetch" type="application/wasm"></head>
   <body></body>
 </html>
