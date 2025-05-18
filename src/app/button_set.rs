@@ -85,3 +85,12 @@ where
         </button>
     }
 }
+
+#[component]
+pub fn LinkButton(href: String, children: Children) -> impl IntoView {
+    view! {
+        <a class=styles::icon href=href target="_blank">
+            {children()}
+        </a>
+    }
+}

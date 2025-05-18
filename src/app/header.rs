@@ -10,10 +10,10 @@ use crate::{
     app::{
         ImportProgress,
         advanced_options_menu::AdvancedOptionsMenu,
-        button_set::{Button, ButtonSet, IconButton, Rule},
+        button_set::{Button, ButtonSet, IconButton, LinkButton, Rule},
         config_menu::ConfigMenu,
         context_menu::ContextMenu,
-        icon::{build_icon, config_icon, expandable_icon, more_options_icon},
+        icon::{build_icon, config_icon, expandable_icon, github_icon, more_options_icon},
         output::change_focus,
         pop_button::PopButton,
         state::{Focus, GlobalState, GlobalStateStoreFields},
@@ -58,6 +58,10 @@ pub fn Header() -> impl IntoView {
                     <ButtonSet>
                         <ConfigMenuButton menu_container=menu_container />
                     </ButtonSet>
+                    <ButtonSet>
+                        <GithubButton />
+                    </ButtonSet>
+
                 </div>
             </div>
             <div node_ref=menu_container></div>
@@ -367,4 +371,9 @@ fn ShareButton() -> impl IntoView {
     };
 
     view! { <Button on_click=click>"Share"</Button> }
+}
+
+#[component]
+fn GithubButton() -> impl IntoView {
+    view! { <LinkButton href="https://github.com/Spxg/sqlight".into()>{github_icon()}</LinkButton> }
 }
