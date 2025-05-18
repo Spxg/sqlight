@@ -9,10 +9,21 @@ use web_sys::MediaQueryList;
 
 use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult, WorkerHandle};
 
-const DEFAULT_CODE: &str = "SELECT 'Hello World!',
+const DEFAULT_CODE: &str = "PRAGMA page_size=4096;
+
+CREATE TABLE IF NOT EXISTS blobs  (
+    id INTEGER PRIMARY KEY,
+    data BLOB
+);
+
+INSERT INTO blobs(data) VALUES (randomblob(12));
+
+SELECT 'Hello World!',
         datetime('now','localtime') AS TM,
         x'73716c69676874' AS BLOB_VAL,
-        NULL as NULL_VAL;";
+        NULL as NULL_VAL;
+
+SELECT * FROM blobs;";
 
 #[derive(Store, Serialize, Deserialize)]
 pub struct GlobalState {
