@@ -11,7 +11,7 @@ use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult, WorkerHandle}
 
 const DEFAULT_CODE: &str = "PRAGMA page_size=4096;
 
-CREATE TABLE IF NOT EXISTS blobs  (
+CREATE TABLE IF NOT EXISTS blobs (
     id INTEGER PRIMARY KEY,
     data BLOB
 );

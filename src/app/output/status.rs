@@ -82,7 +82,7 @@ pub fn Status() -> impl IntoView {
     let import_progress = move || {
         if let Some(progress) = &*state.import_progress().read() {
             let filename = format!("Filename: {}", progress.filename);
-            let loading = format!("Loading: {} of {} bytes.", progress.loaded, progress.total);
+            let loading = format!("Loading: {} of {} bytes", progress.loaded, progress.total);
 
             let status = if progress.loaded == progress.total {
                 view! { <p>"Loading completed"</p> }.into_any()
@@ -94,9 +94,9 @@ pub fn Status() -> impl IntoView {
                 match &progress.opened {
                     Some(success) => {
                         if *success {
-                            view! { <p>"Process success"</p> }.into_any()
+                            view! { <p>"Processing completed"</p> }.into_any()
                         } else {
-                            view! { <p>"Process failed"</p> }.into_any()
+                            view! { <p>"Processing failed"</p> }.into_any()
                         }
                     }
                     None => view! { <p>"Processing..."</p> }.into_any(),
