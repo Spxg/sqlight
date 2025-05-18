@@ -177,33 +177,29 @@ fn LoadButton(input_ref: NodeRef<Input>) -> impl IntoView {
 
                 let on_error = FragileComfirmed::new(Closure::wrap(Box::new(
                     move |ev: web_sys::ProgressEvent| {
-                        if let Some(target) = ev.target() {
-                            let reader = target.unchecked_into::<FileReader>();
-                            if let Some(dom_error) = reader.error() {
-                                state.last_error().set(Some(FragileComfirmed::new(
-                                    SQLightError::ImportDb(dom_error.message().to_string()),
-                                )));
-                            }
-                        }
+                        let target = ev.target().unwrap();
+                        let reader = target.unchecked_into::<FileReader>();
+                        let dom_error = reader.error().unwrap();
+                        state.last_error().set(Some(FragileComfirmed::new(
+                            SQLightError::ImportDb(dom_error.message().to_string()),
+                        )));
                     },
                 )
                     as Box<dyn FnMut(_)>));
 
                 let on_load =
                     FragileComfirmed::new(Closure::wrap(Box::new(move |ev: web_sys::Event| {
-                        if let Some(target) = ev.target() {
-                            let reader = target.unchecked_into::<FileReader>();
-                            if let Ok(result) = reader.result() {
-                                let array_buffer = result.unchecked_into::<js_sys::ArrayBuffer>();
-                                let data = js_sys::Uint8Array::new(&array_buffer);
-                                if let Some(worker) = &*state.worker().read() {
-                                    worker.send_task(WorkerRequest::LoadDb(LoadDbOptions {
-                                        // FIXME: multi db
-                                        id: String::new(),
-                                        data,
-                                    }));
-                                }
-                            }
+                        let target = ev.target().unwrap();
+                        let reader = target.unchecked_into::<FileReader>();
+                        let result = reader.result().unwrap();
+                        let array_buffer = result.unchecked_into::<js_sys::ArrayBuffer>();
+                        let data = js_sys::Uint8Array::new(&array_buffer);
+                        if let Some(worker) = &*state.worker().read() {
+                            worker.send_task(WorkerRequest::LoadDb(LoadDbOptions {
+                                // FIXME: multi db
+                                id: String::new(),
+                                data,
+                            }));
                         }
                     })
                         as Box<dyn FnMut(_)>));
