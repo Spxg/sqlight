@@ -1,11 +1,14 @@
 mod sqlitend;
 
-use crate::{OpenOptions, PERSIST_VFS, PrepareOptions, SQLiteStatementResult, WorkerError};
+use crate::{
+    LoadDbOptions, OpenOptions, PERSIST_VFS, PrepareOptions, SQLiteStatementResult, WorkerError,
+};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use sqlite_wasm_rs::{
     export::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil},
     mem_vfs::MemVfsUtil,
+    utils::copy_to_vec,
 };
 use sqlitend::{SQLiteDb, SQLitePreparedStatement, SQLiteStatements};
 use std::{collections::HashMap, sync::Arc};
@@ -50,31 +53,63 @@ where
     f(DB_POOL.lock().get_mut(id).ok_or(WorkerError::NotFound)?)
 }
 
+async fn opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
+    FS_UTIL
+        .opfs
+        .get_or_try_init(|| async {
+            sqlite_wasm_rs::sahpool_vfs::install(
+                Some(
+                    &OpfsSAHPoolCfgBuilder::new()
+                        .directory(PERSIST_VFS)
+                        .vfs_name(PERSIST_VFS)
+                        .build(),
+                ),
+                false,
+            )
+            .await
+            .map_err(|_| WorkerError::OpfsSAHPoolOpened)
+        })
+        .await
+}
+
+pub async fn load_db(options: LoadDbOptions) -> Result<()> {
+    let db = copy_to_vec(&options.data);
+    with_worker(&options.id, |worker| {
+        worker.db.take();
+
+        let filename = &worker.open_options.filename;
+        let FSUtil { mem, opfs } = &*FS_UTIL;
+        if worker.open_options.persist {
+            if let Some(opfs) = opfs.get() {
+                opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
+
+                if let Err(err) = opfs.import_db(filename, &db) {
+                    return Err(WorkerError::LoadDb(format!("{err}")));
+                }
+            }
+        } else {
+            mem.delete_db(filename);
+            if let Err(err) = mem.import_db(filename, &db) {
+                return Err(WorkerError::LoadDb(format!("{err}")));
+            }
+        }
+
+        worker.db = Some(SQLiteDb::open(&worker.open_options.uri())?);
+        worker.state = SQLiteState::Idie;
+        Ok(())
+    })
+}
+
 pub async fn open(options: OpenOptions) -> Result<String> {
     if let Some(worker) = DB_POOL.lock().get(&options.filename) {
         return Ok(worker.id.clone());
     }
     if options.persist {
-        let util = FS_UTIL
-            .opfs
-            .get_or_try_init(|| async {
-                sqlite_wasm_rs::sahpool_vfs::install(
-                    Some(
-                        &OpfsSAHPoolCfgBuilder::new()
-                            .directory(PERSIST_VFS)
-                            .vfs_name(PERSIST_VFS)
-                            .build(),
-                    ),
-                    false,
-                )
-                .await
-                .map_err(|_| WorkerError::OpfsSAHPoolOpened)
-            })
-            .await?;
+        let util = opfs_util().await?;
         if util.get_capacity() - util.get_file_count() * 3 < 3 {
             util.add_capacity(3)
                 .await
-                .map_err(|_| WorkerError::OpfsSAHError)?;
+                .map_err(|_| WorkerError::Unexpected)?;
         }
     }
     // FIXME: multi db support
@@ -99,8 +134,7 @@ pub fn prepare(options: PrepareOptions) -> Result<()> {
             let FSUtil { mem, opfs } = &*FS_UTIL;
             if worker.open_options.persist {
                 if let Some(opfs) = opfs.get() {
-                    opfs.unlink(filename)
-                        .map_err(|_| WorkerError::OpfsSAHError)?;
+                    opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
                 }
             } else {
                 mem.delete_db(filename);

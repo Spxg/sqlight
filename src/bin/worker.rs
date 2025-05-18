@@ -6,7 +6,7 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
 fn main() {
     console_error_panic_hook::set_once();
-    console_log::init_with_level(log::Level::Warn).unwrap();
+    console_log::init_with_level(log::Level::Debug).unwrap();
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<JsValue>();
 
@@ -34,6 +34,9 @@ async fn execute_task(scope: DedicatedWorkerGlobalScope, mut rx: UnboundedReceiv
             WorkerRequest::StepOver(id) => WorkerResponse::StepOver(worker::step_over(&id)),
             WorkerRequest::StepIn(id) => WorkerResponse::StepIn(worker::step_in(&id)),
             WorkerRequest::StepOut(id) => WorkerResponse::StepOut(worker::step_out(&id)),
+            WorkerRequest::LoadDb(options) => {
+                WorkerResponse::LoadDb(worker::load_db(options).await)
+            }
         };
         if let Err(err) = scope.post_message(&serde_wasm_bindgen::to_value(&resp).unwrap()) {
             log::error!("Failed to send task to window: {resp:?}, {err:?}");

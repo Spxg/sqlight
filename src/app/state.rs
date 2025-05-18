@@ -41,6 +41,8 @@ pub struct GlobalState {
     output: Vec<SQLiteStatementResult>,
     #[serde(skip)]
     last_error: Option<FragileComfirmed<SQLightError>>,
+    #[serde(skip)]
+    import_progress: Option<ImportProgress>,
 }
 
 impl Default for GlobalState {
@@ -62,6 +64,7 @@ impl Default for GlobalState {
             show_something: false,
             output: Vec::new(),
             last_error: None,
+            import_progress: None,
         }
     }
 }
@@ -83,6 +86,12 @@ impl GlobalState {
             log::error!("Faild to save config to localstorage: {e:?}");
         }
     }
+}
+
+pub struct ImportProgress {
+    pub filename: String,
+    pub loaded: f64,
+    pub total: f64,
 }
 
 #[derive(Serialize, Deserialize)]

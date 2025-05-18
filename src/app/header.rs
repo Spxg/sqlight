@@ -1,11 +1,13 @@
 use istyles::istyles;
-use leptos::{prelude::*, tachys::html};
+use leptos::{html::Input, prelude::*, tachys::html};
 use reactive_stores::Store;
-use web_sys::{Url, UrlSearchParams};
+use wasm_bindgen::{JsCast, prelude::Closure};
+use web_sys::{Event, FileReader, HtmlInputElement, Url, UrlSearchParams};
 
 use crate::{
-    PrepareOptions, WorkerRequest,
+    FragileComfirmed, LoadDbOptions, PrepareOptions, SQLightError, WorkerRequest,
     app::{
+        ImportProgress, Vfs,
         advanced_options_menu::AdvancedOptionsMenu,
         button_set::{Button, ButtonSet, IconButton, Rule},
         config_menu::ConfigMenu,
@@ -24,6 +26,8 @@ istyles!(styles, "assets/module.postcss/header.module.css.map");
 pub fn Header() -> impl IntoView {
     let menu_container = NodeRef::new();
 
+    let input_ref = NodeRef::new();
+
     view! {
         <>
             <div id="header" class=styles::container>
@@ -41,6 +45,10 @@ pub fn Header() -> impl IntoView {
                     </ButtonSet>
                 </div>
                 <div class=styles::right>
+                    <input type="file" node_ref=input_ref style="display: none" />
+                    <ButtonSet>
+                        <LoadButton input_ref=input_ref />
+                    </ButtonSet>
                     <ButtonSet>
                         <ShareButton />
                     </ButtonSet>
@@ -97,6 +105,108 @@ fn ExecuteButton() -> impl IntoView {
             "Run"
         </Button>
     }
+}
+
+#[component]
+fn LoadButton(input_ref: NodeRef<Input>) -> impl IntoView {
+    let state = expect_context::<Store<GlobalState>>();
+
+    let (file, set_file) = signal::<Option<FragileComfirmed<web_sys::File>>>(None);
+
+    Effect::new(move || {
+        if let Some(file) = &*file.read() {
+            let filename = file.name();
+
+            if let Ok(reader) = FileReader::new() {
+                let on_progress = FragileComfirmed::new(Closure::wrap(Box::new(
+                    move |ev: web_sys::ProgressEvent| {
+                        if ev.length_computable() {
+                            state.import_progress().set(Some(ImportProgress {
+                                filename: filename.clone(),
+                                loaded: ev.loaded(),
+                                total: ev.total(),
+                            }));
+                        }
+                    },
+                )
+                    as Box<dyn FnMut(_)>));
+
+                let on_error = FragileComfirmed::new(Closure::wrap(Box::new(
+                    move |ev: web_sys::ProgressEvent| {
+                        if let Some(target) = ev.target() {
+                            let reader = target.unchecked_into::<FileReader>();
+                            if let Some(dom_error) = reader.error() {
+                                state.last_error().set(Some(FragileComfirmed::new(
+                                    SQLightError::ImportDb(dom_error.message().to_string()),
+                                )));
+                            }
+                        }
+                    },
+                )
+                    as Box<dyn FnMut(_)>));
+
+                let on_load =
+                    FragileComfirmed::new(Closure::wrap(Box::new(move |ev: web_sys::Event| {
+                        if let Some(target) = ev.target() {
+                            let reader = target.unchecked_into::<FileReader>();
+                            if let Ok(result) = reader.result() {
+                                let array_buffer = result.unchecked_into::<js_sys::ArrayBuffer>();
+                                let data = js_sys::Uint8Array::new(&array_buffer);
+                                let persist = state.vfs().get() != Vfs::Memory;
+                                if let Some(worker) = &*state.worker().read() {
+                                    worker.send_task(WorkerRequest::LoadDb(LoadDbOptions {
+                                        // FIXME: multi db
+                                        id: String::new(),
+                                        persist,
+                                        data,
+                                    }));
+                                }
+                            }
+                        }
+                    })
+                        as Box<dyn FnMut(_)>));
+
+                reader.set_onprogress(Some(on_progress.as_ref().unchecked_ref()));
+                reader.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+                reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
+                reader.read_as_array_buffer(file).unwrap();
+
+                on_cleanup(move || {
+                    drop(on_progress);
+                    drop(on_error);
+                    drop(on_load);
+                });
+            }
+        }
+    });
+
+    let on_change = move |ev: Event| {
+        if let Some(target) = ev.target() {
+            let input = target.unchecked_into::<HtmlInputElement>();
+            if let Some(files) = input.files() {
+                if files.length() > 0 {
+                    let file = FragileComfirmed::new(files.get(0).unwrap());
+                    set_file.set(Some(file));
+                } else {
+                    set_file.set(None);
+                }
+            }
+        }
+    };
+
+    let on_click = move |_| {
+        if let Some(input) = &*input_ref.read() {
+            if input.onchange().is_none() {
+                let callback = Closure::wrap(Box::new(on_change) as Box<dyn Fn(Event)>);
+                input.set_onchange(Some(callback.as_ref().unchecked_ref::<js_sys::Function>()));
+                callback.forget();
+            }
+            input.set_value("");
+            input.click();
+        }
+    };
+
+    view! { <Button on_click=on_click>"Load DB"</Button> }
 }
 
 #[component]

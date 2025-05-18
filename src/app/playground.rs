@@ -37,6 +37,7 @@ pub fn playground(
         handle_automic_orientation(state);
         handle_connect_db(state);
         hanlde_save_state(state);
+        handle_import_progress(state);
 
         spawn_local(handle_state(state, rx));
 
@@ -78,6 +79,14 @@ fn handle_connect_db(state: Store<GlobalState>) {
 fn handle_last_error(state: Store<GlobalState>) {
     Effect::new(move || {
         if state.last_error().read().is_some() {
+            change_focus(state, Some(Focus::Status));
+        }
+    });
+}
+
+fn handle_import_progress(state: Store<GlobalState>) {
+    Effect::new(move || {
+        if state.import_progress().read().is_some() {
             change_focus(state, Some(Focus::Status));
         }
     });

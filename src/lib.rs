@@ -4,6 +4,7 @@ pub mod worker;
 use aceditor::EditorError;
 use app::{GlobalState, GlobalStateStoreFields};
 use fragile::Fragile;
+use js_sys::Uint8Array;
 use leptos::prelude::*;
 use reactive_stores::Store;
 use std::{
@@ -58,6 +59,8 @@ pub enum SQLightError {
     Worker(#[from] WorkerError),
     #[error(transparent)]
     AceEditor(#[from] EditorError),
+    #[error("Failed to import db: {0}")]
+    ImportDb(String),
 }
 
 impl SQLightError {
@@ -80,8 +83,10 @@ pub enum WorkerError {
     InvaildState,
     #[error("OPFS already opened")]
     OpfsSAHPoolOpened,
-    #[error("OPFS unexpected error")]
-    OpfsSAHError,
+    #[error("Failed to import db: {0}")]
+    LoadDb(String),
+    #[error("Unexpected error")]
+    Unexpected,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,6 +97,7 @@ pub enum WorkerRequest {
     StepOver(String),
     StepIn(String),
     StepOut(String),
+    LoadDb(LoadDbOptions),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,12 +109,21 @@ pub enum WorkerResponse {
     StepOver(Result<SQLiteStatementResult>),
     StepIn(Result<()>),
     StepOut(Result<SQLiteStatementResult>),
+    LoadDb(Result<()>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenOptions {
     pub filename: String,
     pub persist: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoadDbOptions {
+    pub id: String,
+    pub persist: bool,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub data: Uint8Array,
 }
 
 impl OpenOptions {
@@ -158,11 +173,11 @@ pub struct SQLiteStatementValues {
 pub enum SQLitendError {
     #[error("An error occurred while converting a string to a CString")]
     ToCStr,
-    #[error("An error occurred while opening the DB: {0:?}")]
+    #[error("An error occurred while opening the DB: {0:#?}")]
     OpenDb(InnerError),
-    #[error("An error occurred while preparing stmt: {0:?}")]
+    #[error("An error occurred while preparing stmt: {0:#?}")]
     Prepare(InnerError),
-    #[error("An error occurred while stepping to the next line: {0:?}")]
+    #[error("An error occurred while stepping to the next line: {0:#?}")]
     Step(InnerError),
     #[error("An error occurred while getting column name: {0}")]
     GetColumnName(String),
@@ -239,6 +254,15 @@ pub async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<W
             WorkerResponse::StepOver(_)
             | WorkerResponse::StepIn(_)
             | WorkerResponse::StepOut(_) => unimplemented!(),
+            WorkerResponse::LoadDb(result) => {
+                let keep_ctx = result.is_ok();
+                if let Err(err) = result {
+                    state.last_error().set(Some(SQLightError::new_worker(err)));
+                }
+                state
+                    .keep_ctx()
+                    .maybe_update(|keep| std::mem::replace(keep, keep_ctx) != keep_ctx);
+            }
         }
     }
 }
