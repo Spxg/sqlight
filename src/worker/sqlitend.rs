@@ -231,7 +231,7 @@ impl SQLitePreparedStatement {
                         let Ok(text) = std::str::from_utf8(slice) else {
                             return Err(SQLitendError::Utf8Text);
                         };
-                        format!("{text:?}")
+                        format!("'{text}'")
                     }
                     SQLITE_BLOB => {
                         let slice = {
