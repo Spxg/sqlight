@@ -1,12 +1,13 @@
 use istyles::istyles;
 use leptos::{html::Input, prelude::*, tachys::html};
+use prettytable::{Cell, Row, Table};
 use reactive_stores::Store;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use web_sys::{Blob, Event, FileReader, HtmlInputElement, Url, UrlSearchParams};
 
 use crate::{
     DownloadDbOptions, FragileComfirmed, LoadDbOptions, PrepareOptions, SQLightError,
-    WorkerRequest,
+    SQLiteStatementResult, WorkerRequest,
     app::{
         ImportProgress,
         advanced_options_menu::AdvancedOptionsMenu,
@@ -358,6 +359,44 @@ fn ShareButton() -> impl IntoView {
             return;
         };
 
+        let mut offset_inserts = vec![];
+
+        for result in &*state.output().read() {
+            let mut table_s = Table::new();
+
+            match result {
+                SQLiteStatementResult::Finish => continue,
+                SQLiteStatementResult::Step(table) => {
+                    let end = table.position[1];
+
+                    if let Some(values) = &table.values {
+                        table_s.add_row(Row::new(
+                            values.columns.iter().map(|s| Cell::new(s)).collect(),
+                        ));
+                        for row in &values.rows {
+                            table_s.add_row(Row::new(row.iter().map(|s| Cell::new(s)).collect()));
+                        }
+
+                        let result = table_s
+                            .to_string()
+                            .lines()
+                            .map(|x| format!("-- {x}"))
+                            .collect::<Vec<String>>()
+                            .join("\n");
+
+                        offset_inserts.push((end, format!("\n-- Output:\n{result}\n")));
+                    }
+                }
+            }
+        }
+
+        let mut sql_with_result = code.clone();
+        for (idx, result) in offset_inserts.into_iter().rev() {
+            sql_with_result.insert_str(idx, &result);
+        }
+
+        state.share_sql_with_result().set(Some(sql_with_result));
+
         if let Ok(href) = window().location().href().and_then(|href| {
             let url = Url::new(&href)?;
             let params = UrlSearchParams::new()?;
@@ -366,8 +405,9 @@ fn ShareButton() -> impl IntoView {
             Ok(url.href())
         }) {
             state.share_href().set(Some(href));
-            change_focus(state, Some(Focus::Share));
         }
+
+        change_focus(state, Some(Focus::Share));
     };
 
     view! { <Button on_click=click>"Share"</Button> }
