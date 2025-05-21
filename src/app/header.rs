@@ -384,7 +384,7 @@ fn ShareButton() -> impl IntoView {
                             .collect::<Vec<String>>()
                             .join("\n");
 
-                        offset_inserts.push((end, format!("\n-- Output:\n{result}\n")));
+                        offset_inserts.push((end, format!("\n{result}\n")));
                     }
                 }
             }
