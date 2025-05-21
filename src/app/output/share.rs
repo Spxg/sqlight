@@ -78,7 +78,7 @@ fn SQLWithResultLinks() -> impl IntoView {
         string_array.push(&JsValue::from(text));
 
         let blob_properties = BlobPropertyBag::new();
-        blob_properties.set_type("text/plain");
+        blob_properties.set_type("text/plain;charset=UTF-8");
 
         let blob =
             Blob::new_with_str_sequence_and_options(&string_array, &blob_properties).unwrap();

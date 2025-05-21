@@ -359,7 +359,7 @@ fn ShareButton() -> impl IntoView {
             return;
         };
 
-        let mut offset_inserts = vec![];
+        let mut sqls = vec![];
 
         for result in &*state.output().read() {
             let mut table_s = Table::new();
@@ -367,7 +367,7 @@ fn ShareButton() -> impl IntoView {
             match result {
                 SQLiteStatementResult::Finish => continue,
                 SQLiteStatementResult::Step(table) => {
-                    let end = table.position[1];
+                    let mut sql = table.sql.trim().to_string();
 
                     if let Some(values) = &table.values {
                         table_s.add_row(Row::new(
@@ -384,18 +384,16 @@ fn ShareButton() -> impl IntoView {
                             .collect::<Vec<String>>()
                             .join("\n");
 
-                        offset_inserts.push((end, format!("\n{result}\n")));
+                        sql.push('\n');
+                        sql.push_str(&result);
                     }
+
+                    sqls.push(sql);
                 }
             }
         }
 
-        let mut sql_with_result = code.clone();
-        for (idx, result) in offset_inserts.into_iter().rev() {
-            sql_with_result.insert_str(idx, &result);
-        }
-
-        state.share_sql_with_result().set(Some(sql_with_result));
+        state.share_sql_with_result().set(Some(sqls.join("\n\n")));
 
         if let Ok(href) = window().location().href().and_then(|href| {
             let url = Url::new(&href)?;
