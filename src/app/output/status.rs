@@ -46,7 +46,7 @@ pub fn Status() -> impl IntoView {
                         "This shouldn't happen, please create an issue on github."
                     }
                     WorkerError::InvaildState => {
-                        "SQLite is in an abnormal state when executing SQLite."
+                        "SQLite is in an abnormal state when executing SQLite, please enable the discard context option and use it once."
                     }
                     WorkerError::LoadDb(_) => {
                         "Please check whether the imported DB is a SQLite3 file"

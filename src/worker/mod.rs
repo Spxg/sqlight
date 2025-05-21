@@ -167,7 +167,11 @@ pub async fn prepare(options: PrepareOptions) -> Result<()> {
             worker.db = Some(SQLiteDb::open(&worker.open_options.uri())?);
         }
 
-        let stmts = worker.db.as_ref().unwrap().prepare(&options.sql)?;
+        let stmts = worker
+            .db
+            .as_ref()
+            .ok_or(WorkerError::InvaildState)?
+            .prepare(&options.sql)?;
         worker.state = SQLiteState::Prepared(PreparedState {
             stmts,
             prepared: None,
