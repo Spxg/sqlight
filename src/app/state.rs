@@ -194,7 +194,7 @@ impl Theme {
     }
 
     pub fn value(&self) -> Self {
-        if *self == Theme::System {
+        if self.is_system() {
             Self::match_media()
                 .map(|query| {
                     if query.matches() {
@@ -250,7 +250,7 @@ impl Orientation {
     }
 
     pub fn value(&self) -> Self {
-        if *self == Orientation::Automatic {
+        if self.is_auto() {
             Self::match_media()
                 .map(|query| {
                     if query.matches() {
