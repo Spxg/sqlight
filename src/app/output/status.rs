@@ -32,18 +32,21 @@ pub fn Status() -> impl IntoView {
                             "This shouldn't happen, please create an issue on github."
                         }
                         SQLitendError::OpenDb(_) | SQLitendError::Step(_) => {
-                            "If database disk image is malformed, enable the discard context option and run it once."
+                            "If database disk image is malformed, change the context option and run it once."
                         }
                         SQLitendError::Prepare(_) => "Check if the syntax is correct.",
                         SQLitendError::UnsupportColumnType(_) => {
                             "An unsupported type was encountered, please create an issue on github."
                         }
                     },
-                    WorkerError::NotFound | WorkerError::Unexpected => {
+                    WorkerError::NotOpened => {
+                        "This is most likely to happen only on OPFS VFS, switch VFS and try again."
+                    }
+                    WorkerError::Unexpected => {
                         "This shouldn't happen, please create an issue on github."
                     }
                     WorkerError::InvaildState => {
-                        "SQLite is in an abnormal state when executing sql, enable the discard context option and run it once."
+                        "SQLite is in an abnormal state when executing sql, change the context option and run it once."
                     }
                     WorkerError::LoadDb(_) => "Check whether the imported DB is a SQLite3 file.",
                     WorkerError::DownloadDb(_) => "It may be caused by OOM.",

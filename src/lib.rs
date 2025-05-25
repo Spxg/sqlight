@@ -77,8 +77,8 @@ impl SQLightError {
 pub enum WorkerError {
     #[error(transparent)]
     SQLite(#[from] SQLitendError),
-    #[error("Not found database")]
-    NotFound,
+    #[error("DB is not opened")]
+    NotOpened,
     #[error("Execute sqlite with invaild state")]
     InvaildState,
     #[error("OPFS already opened")]

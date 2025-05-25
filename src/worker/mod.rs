@@ -49,7 +49,7 @@ async fn with_worker<F, T>(mut f: F) -> Result<T>
 where
     F: FnMut(&mut SQLiteWorker) -> Result<T>,
 {
-    f(DB.lock().await.as_mut().ok_or(WorkerError::NotFound)?)
+    f(DB.lock().await.as_mut().ok_or(WorkerError::NotOpened)?)
 }
 
 async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
