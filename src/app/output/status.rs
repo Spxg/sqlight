@@ -14,7 +14,7 @@ use crate::{
 const OPFS_SAH_POOL_OPENED_DETAILS: &str = "Due to OPFS SyncAccessHandle restrictions, \
 the db can only have one web tab access.
 
-Please close other tabs and refresh, or switch to Memory VFS.";
+Close other tabs and refresh, or switch to memory VFS.";
 
 #[component]
 pub fn Status() -> impl IntoView {
@@ -31,13 +31,10 @@ pub fn Status() -> impl IntoView {
                         | SQLitendError::Utf8Text => {
                             "This shouldn't happen, please create an issue on github."
                         }
-                        SQLitendError::OpenDb(_) => {
-                            "If database disk image is malformed, please enable the discard context option and use it once."
+                        SQLitendError::OpenDb(_) | SQLitendError::Step(_) => {
+                            "If database disk image is malformed, enable the discard context option and run it once."
                         }
-                        SQLitendError::Prepare(_) => "Please check if the syntax is correct.",
-                        SQLitendError::Step(_) => {
-                            "If database disk image is malformed, please enable the discard context option and use it once."
-                        }
+                        SQLitendError::Prepare(_) => "Check if the syntax is correct.",
                         SQLitendError::UnsupportColumnType(_) => {
                             "An unsupported type was encountered, please create an issue on github."
                         }
@@ -46,12 +43,10 @@ pub fn Status() -> impl IntoView {
                         "This shouldn't happen, please create an issue on github."
                     }
                     WorkerError::InvaildState => {
-                        "SQLite is in an abnormal state when executing SQLite, please enable the discard context option and use it once."
+                        "SQLite is in an abnormal state when executing sql, enable the discard context option and run it once."
                     }
-                    WorkerError::LoadDb(_) => {
-                        "Please check whether the imported DB is a SQLite3 file"
-                    }
-                    WorkerError::DownloadDb(_) => "It may be caused by OOM",
+                    WorkerError::LoadDb(_) => "Check whether the imported DB is a SQLite3 file.",
+                    WorkerError::DownloadDb(_) => "It may be caused by OOM.",
                     WorkerError::OpfsSAHPoolOpened => OPFS_SAH_POOL_OPENED_DETAILS,
                 },
                 SQLightError::AceEditor(ace_editor) => match ace_editor {
