@@ -2,8 +2,6 @@
 
 A SQLite Playground that runs completely locally.
 
-<img alt="image" src="https://github.com/user-attachments/assets/c75858f3-27a4-49b6-805e-c42db6d40593" width="75%" />
-
 ## How it works
 
 Run SQLite as wasm in the browser using [`sqlite-wasm-rs`](https://github.com/Spxg/sqlite-wasm-rs).
