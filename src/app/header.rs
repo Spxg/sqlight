@@ -277,7 +277,7 @@ fn ContextMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoVi
     let button = move |toggle, node_ref| {
         view! {
             <Button icon_right=expandable_icon() on_click=toggle node_ref=node_ref>
-                {move || if *state.keep_ctx().read() { "Keep Context" } else { "Discard Context" }}
+                {move || if *state.keep_ctx().read() { "Keep Context" } else { "Drop Context" }}
             </Button>
         }
         .into_any()

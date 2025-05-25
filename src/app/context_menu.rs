@@ -12,7 +12,7 @@ pub fn ContextMenu() -> impl IntoView {
     view! {
         <MenuGroup title="Choose whether to keep the context".into()>
             <SelectOne
-                name="Discard Context".into()
+                name="Drop Context".into()
                 current_value=move || { *state.keep_ctx().read() }
                 this_value=false
                 change_value=move || {
