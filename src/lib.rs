@@ -77,7 +77,7 @@ impl SQLightError {
 pub enum WorkerError {
     #[error(transparent)]
     SQLite(#[from] SQLitendError),
-    #[error("Not found database by id")]
+    #[error("Not found database")]
     NotFound,
     #[error("Execute sqlite with invaild state")]
     InvaildState,
@@ -95,18 +95,18 @@ pub enum WorkerError {
 pub enum WorkerRequest {
     Open(OpenOptions),
     Prepare(PrepareOptions),
-    Continue(String),
-    StepOver(String),
-    StepIn(String),
-    StepOut(String),
+    Continue,
+    StepOver,
+    StepIn,
+    StepOut,
     LoadDb(LoadDbOptions),
-    DownloadDb(DownloadDbOptions),
+    DownloadDb,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerResponse {
     Ready,
-    Open(Result<String>),
+    Open(Result<()>),
     Prepare(Result<()>),
     Continue(Result<Vec<SQLiteStatementResult>>),
     StepOver(Result<SQLiteStatementResult>),
@@ -131,14 +131,8 @@ pub struct OpenOptions {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoadDbOptions {
-    pub id: String,
     #[serde(with = "serde_wasm_bindgen::preserve")]
     pub data: Uint8Array,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DownloadDbOptions {
-    pub id: String,
 }
 
 impl OpenOptions {
@@ -153,7 +147,6 @@ impl OpenOptions {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PrepareOptions {
-    pub id: String,
     pub sql: String,
     pub clear_on_prepare: bool,
 }
@@ -255,10 +248,11 @@ pub async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<W
 
         match resp {
             WorkerResponse::Ready => unreachable!(),
-            WorkerResponse::Open(result) => match result {
-                Ok(_) => (),
-                Err(err) => state.last_error().set(Some(SQLightError::new_worker(err))),
-            },
+            WorkerResponse::Open(result) => {
+                if let Err(err) = result {
+                    state.last_error().set(Some(SQLightError::new_worker(err)));
+                }
+            }
             WorkerResponse::Prepare(result) => {
                 if let Err(err) = result {
                     state.last_error().set(Some(SQLightError::new_worker(err)));

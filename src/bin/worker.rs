@@ -32,16 +32,14 @@ async fn execute_task(scope: DedicatedWorkerGlobalScope, mut rx: UnboundedReceiv
             WorkerRequest::Prepare(options) => {
                 WorkerResponse::Prepare(worker::prepare(options).await)
             }
-            WorkerRequest::Continue(id) => WorkerResponse::Continue(worker::r#continue(&id)),
-            WorkerRequest::StepOver(id) => WorkerResponse::StepOver(worker::step_over(&id)),
-            WorkerRequest::StepIn(id) => WorkerResponse::StepIn(worker::step_in(&id)),
-            WorkerRequest::StepOut(id) => WorkerResponse::StepOut(worker::step_out(&id)),
+            WorkerRequest::Continue => WorkerResponse::Continue(worker::r#continue().await),
+            WorkerRequest::StepOver => WorkerResponse::StepOver(worker::step_over().await),
+            WorkerRequest::StepIn => WorkerResponse::StepIn(worker::step_in().await),
+            WorkerRequest::StepOut => WorkerResponse::StepOut(worker::step_out().await),
             WorkerRequest::LoadDb(options) => {
                 WorkerResponse::LoadDb(worker::load_db(options).await)
             }
-            WorkerRequest::DownloadDb(options) => {
-                WorkerResponse::DownloadDb(worker::download_db(options).await)
-            }
+            WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(worker::download_db().await),
         };
         if let Err(err) = scope.post_message(&serde_wasm_bindgen::to_value(&resp).unwrap()) {
             log::error!("Failed to send task to window: {resp:?}, {err:?}");

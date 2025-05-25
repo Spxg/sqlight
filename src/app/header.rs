@@ -6,8 +6,8 @@ use wasm_bindgen::{JsCast, prelude::Closure};
 use web_sys::{Blob, Event, FileReader, HtmlInputElement, Url, UrlSearchParams};
 
 use crate::{
-    DownloadDbOptions, FragileComfirmed, LoadDbOptions, PrepareOptions, SQLightError,
-    SQLiteStatementResult, WorkerRequest,
+    FragileComfirmed, LoadDbOptions, PrepareOptions, SQLightError, SQLiteStatementResult,
+    WorkerRequest,
     app::{
         ImportProgress,
         advanced_options_menu::AdvancedOptionsMenu,
@@ -89,7 +89,6 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
 
         if let Some(worker) = &*state.worker().read_untracked() {
             worker.send_task(WorkerRequest::Prepare(PrepareOptions {
-                id: String::new(),
                 sql: if !selected_code.is_empty() && run_selected_code {
                     selected_code
                 } else {
@@ -97,7 +96,7 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
                 },
                 clear_on_prepare: !*state.keep_ctx().read_untracked(),
             }));
-            worker.send_task(WorkerRequest::Continue(String::new()));
+            worker.send_task(WorkerRequest::Continue);
         }
     })
 }
@@ -149,10 +148,7 @@ fn DownloadButton() -> impl IntoView {
 
     let on_click = move |_| {
         if let Some(worker) = &*state.worker().read() {
-            worker.send_task(WorkerRequest::DownloadDb(DownloadDbOptions {
-                // FIXME: multi db
-                id: String::new(),
-            }));
+            worker.send_task(WorkerRequest::DownloadDb);
         }
     };
 
@@ -204,11 +200,7 @@ fn LoadButton(input_ref: NodeRef<Input>) -> impl IntoView {
                         let array_buffer = result.unchecked_into::<js_sys::ArrayBuffer>();
                         let data = js_sys::Uint8Array::new(&array_buffer);
                         if let Some(worker) = &*state.worker().read() {
-                            worker.send_task(WorkerRequest::LoadDb(LoadDbOptions {
-                                // FIXME: multi db
-                                id: String::new(),
-                                data,
-                            }));
+                            worker.send_task(WorkerRequest::LoadDb(LoadDbOptions { data }));
                         }
                     })
                         as Box<dyn FnMut(_)>));

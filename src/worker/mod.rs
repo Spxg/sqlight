@@ -1,24 +1,23 @@
 mod sqlitend;
 
 use crate::{
-    DownloadDbOptions, DownloadDbResponse, LoadDbOptions, OpenOptions, PERSIST_VFS, PrepareOptions,
+    DownloadDbResponse, LoadDbOptions, OpenOptions, PERSIST_VFS, PrepareOptions,
     SQLiteStatementResult, WorkerError,
 };
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
 use sqlite_wasm_rs::{
     export::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil},
     mem_vfs::MemVfsUtil,
     utils::{copy_to_uint8_array, copy_to_vec},
 };
 use sqlitend::{SQLiteDb, SQLitePreparedStatement, SQLiteStatements};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 
 type Result<T> = std::result::Result<T, WorkerError>;
 
-static DB_POOL: Lazy<Mutex<HashMap<String, SQLiteWorker>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static DB: Lazy<Mutex<Option<SQLiteWorker>>> = Lazy::new(|| Mutex::new(None));
 
 static FS_UTIL: Lazy<FSUtil> = Lazy::new(|| FSUtil {
     mem: MemVfsUtil::new(),
@@ -31,7 +30,6 @@ struct FSUtil {
 }
 
 struct SQLiteWorker {
-    id: String,
     db: Option<Arc<SQLiteDb>>,
     open_options: OpenOptions,
     state: SQLiteState,
@@ -47,11 +45,11 @@ struct PreparedState {
     prepared: Option<SQLitePreparedStatement>,
 }
 
-fn with_worker<F, T>(id: &str, mut f: F) -> Result<T>
+async fn with_worker<F, T>(mut f: F) -> Result<T>
 where
     F: FnMut(&mut SQLiteWorker) -> Result<T>,
 {
-    f(DB_POOL.lock().get_mut(id).ok_or(WorkerError::NotFound)?)
+    f(DB.lock().await.as_mut().ok_or(WorkerError::NotFound)?)
 }
 
 async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
@@ -77,8 +75,8 @@ fn get_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
     FS_UTIL.opfs.get().ok_or(WorkerError::Unexpected)
 }
 
-pub async fn download_db(options: DownloadDbOptions) -> Result<DownloadDbResponse> {
-    with_worker(&options.id, |worker| {
+pub async fn download_db() -> Result<DownloadDbResponse> {
+    with_worker(|worker| {
         let filename = &worker.open_options.filename;
         let db = if worker.open_options.persist {
             get_opfs_util()?
@@ -95,12 +93,13 @@ pub async fn download_db(options: DownloadDbOptions) -> Result<DownloadDbRespons
             data: copy_to_uint8_array(&db),
         })
     })
+    .await
 }
 
 pub async fn load_db(options: LoadDbOptions) -> Result<()> {
     let db = copy_to_vec(&options.data);
 
-    with_worker(&options.id, |worker| {
+    with_worker(|worker| {
         worker.db.take();
 
         let filename = &worker.open_options.filename;
@@ -122,35 +121,29 @@ pub async fn load_db(options: LoadDbOptions) -> Result<()> {
         worker.state = SQLiteState::Idie;
         Ok(())
     })
+    .await
 }
 
-pub async fn open(options: OpenOptions) -> Result<String> {
-    if let Some(worker) = DB_POOL.lock().get(&options.filename) {
-        return Ok(worker.id.clone());
-    }
+pub async fn open(options: OpenOptions) -> Result<()> {
+    let mut locker = DB.lock().await;
+    locker.take();
+
     if options.persist {
-        let util = init_opfs_util().await?;
-        if util.get_capacity() - util.get_file_count() * 3 < 3 {
-            util.add_capacity(3)
-                .await
-                .map_err(|_| WorkerError::Unexpected)?;
-        }
+        init_opfs_util().await?;
     }
-    // FIXME: multi db support
-    let id = String::new();
+
     let db = SQLiteDb::open(&options.uri())?;
     let worker = SQLiteWorker {
-        id: id.clone(),
         db: Some(db),
         open_options: options,
         state: SQLiteState::Idie,
     };
-    DB_POOL.lock().insert(id.clone(), worker);
-    Ok(id)
+    *locker = Some(worker);
+    Ok(())
 }
 
 pub async fn prepare(options: PrepareOptions) -> Result<()> {
-    with_worker(&options.id, |worker| {
+    with_worker(|worker| {
         if options.clear_on_prepare {
             worker.db.take();
 
@@ -178,10 +171,11 @@ pub async fn prepare(options: PrepareOptions) -> Result<()> {
         });
         Ok(())
     })
+    .await
 }
 
-pub fn r#continue(id: &str) -> Result<Vec<SQLiteStatementResult>> {
-    with_worker(id, |worker| {
+pub async fn r#continue() -> Result<Vec<SQLiteStatementResult>> {
+    with_worker(|worker| {
         let state = std::mem::replace(&mut worker.state, SQLiteState::Idie);
         let mut result = match state {
             SQLiteState::Idie => return Err(WorkerError::InvaildState),
@@ -197,10 +191,11 @@ pub fn r#continue(id: &str) -> Result<Vec<SQLiteStatementResult>> {
         result.push(SQLiteStatementResult::Finish);
         Ok(result)
     })
+    .await
 }
 
-pub fn step_over(id: &str) -> Result<SQLiteStatementResult> {
-    with_worker(id, |worker| match &mut worker.state {
+pub async fn step_over() -> Result<SQLiteStatementResult> {
+    with_worker(|worker| match &mut worker.state {
         SQLiteState::Idie => Err(WorkerError::InvaildState),
         SQLiteState::Prepared(prepared_state) => {
             if let Some(prepared) = &mut prepared_state.prepared {
@@ -218,10 +213,11 @@ pub fn step_over(id: &str) -> Result<SQLiteStatementResult> {
             }
         }
     })
+    .await
 }
 
-pub fn step_in(id: &str) -> Result<()> {
-    with_worker(id, |worker| {
+pub async fn step_in() -> Result<()> {
+    with_worker(|worker| {
         match &mut worker.state {
             SQLiteState::Idie => return Err(WorkerError::InvaildState),
             SQLiteState::Prepared(prepared_state) => {
@@ -237,10 +233,11 @@ pub fn step_in(id: &str) -> Result<()> {
         };
         Ok(())
     })
+    .await
 }
 
-pub fn step_out(id: &str) -> Result<SQLiteStatementResult> {
-    with_worker(id, |worker| match &mut worker.state {
+pub async fn step_out() -> Result<SQLiteStatementResult> {
+    with_worker(|worker| match &mut worker.state {
         SQLiteState::Idie => Err(WorkerError::InvaildState),
         SQLiteState::Prepared(prepared_state) => {
             if let Some(prepared) = prepared_state.prepared.take() {
@@ -250,4 +247,5 @@ pub fn step_out(id: &str) -> Result<SQLiteStatementResult> {
             }
         }
     })
+    .await
 }
