@@ -28,6 +28,9 @@ mod bindgen {
         #[wasm_bindgen(method, js_name = getValue)]
         pub fn get_value(this: &Editor) -> String;
 
+        #[wasm_bindgen(method, js_name = setValue)]
+        pub fn set_value(this: &Editor, value: String);
+
         #[wasm_bindgen(method, js_name = getSelectedText)]
         pub fn get_selected_text(this: &Editor) -> String;
     }
@@ -199,6 +202,10 @@ impl Editor {
 
     pub fn get_value(&self) -> String {
         self.js.get_value()
+    }
+
+    pub fn set_value(&self, value: String) {
+        self.js.set_value(value);
     }
 
     pub fn get_selected_value(&self) -> String {

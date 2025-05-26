@@ -20,7 +20,7 @@ INSERT INTO blobs(data) VALUES (randomblob(12));
 
 SELECT 'Hello World!',
         datetime('now','localtime') AS TM,
-        x'73716c69676874' AS BLOB_VAL,
+        unhex('73716c69676874') AS BLOB_VAL,
         NULL as NULL_VAL;
 
 SELECT * FROM blobs;";
