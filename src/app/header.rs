@@ -271,6 +271,9 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
                         on_embed=move |e| {
                             on_embed(e, signal);
                         }
+                        on_internal=move |_| {
+                            signal.set(false);
+                        }
                     />
                 }
                     .into_any()
