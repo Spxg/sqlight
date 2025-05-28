@@ -94,11 +94,7 @@ pub enum WorkerError {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerRequest {
     Open(OpenOptions),
-    Prepare(PrepareOptions),
-    Continue,
-    StepOver,
-    StepIn,
-    StepOut,
+    Run(RunOptions),
     LoadDb(LoadDbOptions),
     DownloadDb,
 }
@@ -107,11 +103,7 @@ pub enum WorkerRequest {
 pub enum WorkerResponse {
     Ready,
     Open(Result<()>),
-    Prepare(Result<()>),
-    Continue(Result<Vec<SQLiteStatementResult>>),
-    StepOver(Result<SQLiteStatementResult>),
-    StepIn(Result<()>),
-    StepOut(Result<SQLiteStatementResult>),
+    Run(Result<SQLiteRunResult>),
     LoadDb(Result<()>),
     DownloadDb(Result<DownloadDbResponse>),
 }
@@ -146,8 +138,9 @@ impl OpenOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PrepareOptions {
+pub struct RunOptions {
     pub sql: String,
+    pub embed: bool,
     pub clear_on_prepare: bool,
 }
 
@@ -155,6 +148,12 @@ pub struct PrepareOptions {
 pub struct InnerError {
     pub code: i32,
     pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SQLiteRunResult {
+    embed: bool,
+    result: Vec<SQLiteStatementResult>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -168,7 +167,6 @@ pub struct SQLiteStatementTable {
     pub sql: String,
     pub position: [usize; 2],
     pub values: Option<SQLiteStatementValues>,
-    pub done: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -253,18 +251,16 @@ pub async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<W
                     state.last_error().set(Some(SQLightError::new_worker(err)));
                 }
             }
-            WorkerResponse::Prepare(result) => {
-                if let Err(err) = result {
-                    state.last_error().set(Some(SQLightError::new_worker(err)));
+            WorkerResponse::Run(result) => match result {
+                Ok(SQLiteRunResult { embed, result }) => {
+                    if embed {
+                        state.embed().set(result);
+                    } else {
+                        state.output().set(result);
+                    }
                 }
-            }
-            WorkerResponse::Continue(result) => match result {
-                Ok(results) => state.output().set(results),
                 Err(err) => state.last_error().set(Some(SQLightError::new_worker(err))),
             },
-            WorkerResponse::StepOver(_)
-            | WorkerResponse::StepIn(_)
-            | WorkerResponse::StepOut(_) => unimplemented!(),
             WorkerResponse::LoadDb(result) => {
                 let keep_ctx = result.is_ok();
                 if let Some(progress) = &mut *state.import_progress().write() {

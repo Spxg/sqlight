@@ -3,6 +3,7 @@ use std::ops::Deref;
 use istyles::istyles;
 use leptos::prelude::*;
 use leptos::tachys::html;
+use prettytable::{Cell, Row, Table};
 use reactive_stores::Store;
 use split_grid::{Gutter, SplitOptions};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -11,7 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::wasm_bindgen::JsValue;
 
 use crate::{
-    SQLightError,
+    SQLightError, SQLiteStatementResult,
     app::{
         Focus,
         editor::Editor,
@@ -42,6 +43,7 @@ pub fn playground(
         handle_save_state(state);
         handle_import_progress(state);
         handle_ace_config(state);
+        handle_embed_query_result(state);
 
         spawn_local(handle_state(state, rx));
 
@@ -53,6 +55,62 @@ pub fn playground(
         }
         .into_any()
     })
+}
+
+fn handle_embed_query_result(state: Store<GlobalState>) {
+    const MARK: &str = "-- R:";
+
+    Effect::new(move || {
+        let mut sqls = vec![];
+
+        for result in &*state.embed().read() {
+            let mut table_s = Table::new();
+
+            match result {
+                SQLiteStatementResult::Finish => continue,
+                SQLiteStatementResult::Step(table) => {
+                    let sql = table.sql.trim().to_string();
+
+                    let sql = if let Some(values) = &table.values {
+                        table_s.add_row(Row::new(
+                            values.columns.iter().map(|s| Cell::new(s)).collect(),
+                        ));
+                        for row in &values.rows {
+                            table_s.add_row(Row::new(row.iter().map(|s| Cell::new(s)).collect()));
+                        }
+
+                        let mut result = table_s
+                            .to_string()
+                            .lines()
+                            .map(|x| format!("{MARK} {x}"))
+                            .collect::<Vec<String>>()
+                            .join("\n");
+
+                        result.push('\n');
+
+                        let sql = sql
+                            .lines()
+                            .filter(|s| !s.starts_with(MARK))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        result.push_str(&sql);
+
+                        result
+                    } else {
+                        sql
+                    };
+
+                    sqls.push(sql);
+                }
+            }
+        }
+
+        if !sqls.is_empty() {
+            if let Some(editor) = &*state.editor().read_untracked() {
+                editor.set_value(sqls.join("\n\n"));
+            }
+        }
+    });
 }
 
 fn handle_ace_config(state: Store<GlobalState>) {

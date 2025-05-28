@@ -1,13 +1,12 @@
 use istyles::istyles;
 use leptos::{html::Input, prelude::*, tachys::html};
-use prettytable::{Cell, Row, Table};
 use reactive_stores::Store;
+use sqlformat::{FormatOptions, QueryParams};
 use wasm_bindgen::{JsCast, prelude::Closure};
 use web_sys::{Blob, Event, FileReader, HtmlInputElement, MouseEvent, Url, UrlSearchParams};
 
 use crate::{
-    FragileComfirmed, LoadDbOptions, PrepareOptions, SQLightError, SQLiteStatementResult,
-    WorkerRequest,
+    FragileComfirmed, LoadDbOptions, RunOptions, SQLightError, WorkerRequest,
     app::{
         ImportProgress,
         advanced_options_menu::AdvancedOptionsMenu,
@@ -76,31 +75,31 @@ pub fn Header() -> impl IntoView {
 
 pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
     Box::new(move || {
-        let Some((code, selected_code)) = state
-            .editor()
-            .read_untracked()
-            .as_ref()
-            .map(|editor| (editor.get_value(), editor.get_selected_value()))
-        else {
+        let editor_guard = state.editor().read_untracked();
+        let Some(editor) = editor_guard.as_ref() else {
             return;
         };
 
-        let run_selected_code = state.run_selected_sql().get();
+        let (code, selected_code) = (editor.get_value(), editor.get_selected_value());
+
+        drop(editor_guard);
 
         state.sql().set(code.clone());
         change_focus(state, Some(Focus::Execute));
-        std::mem::take(&mut *state.output().write());
+
+        let run_selected_code =
+            !selected_code.is_empty() && state.run_selected_sql().get_untracked();
 
         if let Some(worker) = &*state.worker().read_untracked() {
-            worker.send_task(WorkerRequest::Prepare(PrepareOptions {
-                sql: if !selected_code.is_empty() && run_selected_code {
+            worker.send_task(WorkerRequest::Run(RunOptions {
+                embed: false,
+                sql: if run_selected_code {
                     selected_code
                 } else {
                     code
                 },
                 clear_on_prepare: !*state.keep_ctx().read_untracked(),
             }));
-            worker.send_task(WorkerRequest::Continue);
         }
     })
 }
@@ -209,6 +208,8 @@ fn AdvancedOptionsMenuButton(menu_container: NodeRef<html::element::Div>) -> imp
 
 #[component]
 fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
+    let state = expect_context::<Store<GlobalState>>();
+
     let button = |toggle, node_ref| {
         view! {
             <Button icon_right=expandable_icon() on_click=toggle node_ref=node_ref>
@@ -218,10 +219,62 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
         .into_any()
     };
 
+    let on_format = move |_event, signal: WriteSignal<bool>| {
+        let Some(editor) = &*state.editor().read() else {
+            return;
+        };
+
+        let format_options = FormatOptions {
+            uppercase: Some(true),
+            lines_between_queries: 2,
+            ..Default::default()
+        };
+
+        let sql = sqlformat::format(
+            &editor.get_value(),
+            &QueryParams::default(),
+            &format_options,
+        );
+
+        editor.set_value(sql);
+        signal.set(false);
+    };
+
+    let on_embed = move |_event, signal: WriteSignal<bool>| {
+        let editor_guard = state.editor().read_untracked();
+        let Some(editor) = editor_guard.as_ref() else {
+            return;
+        };
+        let sql = editor.get_value();
+        drop(editor_guard);
+
+        if let Some(worker) = &*state.worker().read_untracked() {
+            worker.send_task(WorkerRequest::Run(RunOptions {
+                embed: true,
+                sql,
+                clear_on_prepare: !*state.keep_ctx().read_untracked(),
+            }));
+        }
+
+        signal.set(false);
+    };
+
     view! {
         <PopButton
             button=button
-            menu=Box::new(|_close| { view! { <ToolsMenu /> }.into_any() })
+            menu=Box::new(move |signal: WriteSignal<bool>| {
+                view! {
+                    <ToolsMenu
+                        on_format=move |e| {
+                            on_format(e, signal);
+                        }
+                        on_embed=move |e| {
+                            on_embed(e, signal);
+                        }
+                    />
+                }
+                    .into_any()
+            })
             menu_container=menu_container
         ></PopButton>
     }
@@ -317,7 +370,7 @@ fn DatabaseButton(
         }
     };
 
-    let on_load = move |_: MouseEvent| {
+    let on_load = move |_: MouseEvent, signal: WriteSignal<bool>| {
         if let Some(input) = &*input_ref.read() {
             if input.onchange().is_none() {
                 let callback = Closure::wrap(Box::new(on_change) as Box<dyn Fn(Event)>);
@@ -327,6 +380,7 @@ fn DatabaseButton(
             input.set_value("");
             input.click();
         }
+        signal.set(false);
     };
 
     Effect::new(move || {
@@ -357,17 +411,24 @@ fn DatabaseButton(
         Url::revoke_object_url(&url).unwrap();
     });
 
-    let on_download = move |_| {
+    let on_download = move |_: MouseEvent, signal: WriteSignal<bool>| {
         if let Some(worker) = &*state.worker().read() {
             worker.send_task(WorkerRequest::DownloadDb);
         }
+        signal.set(false);
     };
 
     view! {
         <PopButton
             button=button
-            menu=Box::new(move |_close| {
-                view! { <DatabaseMenu load=on_load download=on_download /> }.into_any()
+            menu=Box::new(move |signal| {
+                view! {
+                    <DatabaseMenu
+                        load=move |e| on_load(e, signal)
+                        download=move |e| on_download(e, signal)
+                    />
+                }
+                    .into_any()
             })
             menu_container=menu_container
         ></PopButton>
@@ -387,42 +448,6 @@ fn ShareButton() -> impl IntoView {
         else {
             return;
         };
-
-        let mut sqls = vec![];
-
-        for result in &*state.output().read() {
-            let mut table_s = Table::new();
-
-            match result {
-                SQLiteStatementResult::Finish => continue,
-                SQLiteStatementResult::Step(table) => {
-                    let mut sql = table.sql.trim().to_string();
-
-                    if let Some(values) = &table.values {
-                        table_s.add_row(Row::new(
-                            values.columns.iter().map(|s| Cell::new(s)).collect(),
-                        ));
-                        for row in &values.rows {
-                            table_s.add_row(Row::new(row.iter().map(|s| Cell::new(s)).collect()));
-                        }
-
-                        let result = table_s
-                            .to_string()
-                            .lines()
-                            .map(|x| format!("-- {x}"))
-                            .collect::<Vec<String>>()
-                            .join("\n");
-
-                        sql.push('\n');
-                        sql.push_str(&result);
-                    }
-
-                    sqls.push(sql);
-                }
-            }
-        }
-
-        state.share_sql_with_result().set(Some(sqls.join("\n\n")));
 
         if let Ok(href) = window().location().href().and_then(|href| {
             let url = Url::new(&href)?;

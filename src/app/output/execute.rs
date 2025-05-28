@@ -1,6 +1,6 @@
 use istyles::istyles;
 use leptos::prelude::*;
-use reactive_stores::{Store, StoreFieldIterator};
+use reactive_stores::Store;
 
 use crate::app::{
     output::{header::Header, loader::Loader, section::Section, simple_pane::SimplePane},
@@ -74,30 +74,38 @@ fn Output() -> AnyView {
                 <Loader />
             </Show>
 
-            <For
-                each=move || state.output().iter_unkeyed().enumerate()
-                key=|(idx, _)| *idx
-                children=move |(idx, item)| {
-                    match &*item.read() {
-                        SQLiteStatementResult::Finish => {
-                            view! { <Header label="Finished".into() /> }.into_any()
-                        }
-                        SQLiteStatementResult::Step(table) => {
-                            let label = format!("Statement #{}", idx + 1);
-                            if let Some(output) = get_output(table) {
-                                view! {
-                                    <Section label=label>
-                                        <p>{output}</p>
-                                    </Section>
+            <>
+                {move || {
+                    state
+                        .output()
+                        .read()
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, item)| {
+                            match &item {
+                                SQLiteStatementResult::Finish => {
+
+                                    view! { <Header label="Finished".into() /> }
+                                        .into_any()
                                 }
-                                    .into_any()
-                            } else {
-                                ().into_any()
+                                SQLiteStatementResult::Step(table) => {
+                                    let label = format!("Statement #{}", idx + 1);
+                                    if let Some(output) = get_output(table) {
+                                        view! {
+                                            <Section label=label>
+                                                <p>{output}</p>
+                                            </Section>
+                                        }
+                                            .into_any()
+                                    } else {
+                                        ().into_any()
+                                    }
+                                }
                             }
-                        }
-                    }
-                }
-            />
+                        })
+                        .collect_view()
+                }}
+            </>
         </>
     }
     .into_any()

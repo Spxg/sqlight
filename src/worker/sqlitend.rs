@@ -1,7 +1,6 @@
 use sqlite_wasm_rs::*;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
-use std::sync::atomic::{self, AtomicBool};
 
 use crate::{
     InnerError, SQLiteStatementResult, SQLiteStatementTable, SQLiteStatementValues, SQLitendError,
@@ -108,7 +107,6 @@ impl SQLiteStatements {
 
         Ok(Some(SQLitePreparedStatement {
             sql,
-            done: AtomicBool::new(false),
             position,
             sqlite3,
             stmt,
@@ -121,6 +119,7 @@ impl SQLiteStatements {
             let stmt = stmt?;
             result.push(stmt.pack(stmt.get_all()?));
         }
+        result.push(SQLiteStatementResult::Finish);
         Ok(result)
     }
 }
@@ -136,7 +135,6 @@ impl Iterator for SQLiteStatements {
 pub struct SQLitePreparedStatement {
     sql: String,
     position: [usize; 2],
-    done: AtomicBool,
     sqlite3: *mut sqlite3,
     stmt: *mut sqlite3_stmt,
 }
@@ -149,10 +147,7 @@ impl SQLitePreparedStatement {
     fn step(&self) -> Result<bool> {
         let ret = unsafe { sqlite3_step(self.stmt) };
         match ret {
-            SQLITE_DONE => {
-                self.done.store(true, atomic::Ordering::SeqCst);
-                Ok(false)
-            }
+            SQLITE_DONE => Ok(false),
             SQLITE_ROW => Ok(true),
             code => Err(SQLitendError::Step(sqlite_err(code, self.sqlite3))),
         }
@@ -162,7 +157,6 @@ impl SQLitePreparedStatement {
         let values = SQLiteStatementTable {
             sql: self.sql.clone(),
             position: self.position,
-            done: self.done.load(atomic::Ordering::SeqCst),
             values,
         };
         SQLiteStatementResult::Step(values)

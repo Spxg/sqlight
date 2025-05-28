@@ -29,13 +29,7 @@ async fn execute_task(scope: DedicatedWorkerGlobalScope, mut rx: UnboundedReceiv
         let request = serde_wasm_bindgen::from_value::<WorkerRequest>(request).unwrap();
         let resp = match request {
             WorkerRequest::Open(options) => WorkerResponse::Open(worker::open(options).await),
-            WorkerRequest::Prepare(options) => {
-                WorkerResponse::Prepare(worker::prepare(options).await)
-            }
-            WorkerRequest::Continue => WorkerResponse::Continue(worker::r#continue().await),
-            WorkerRequest::StepOver => WorkerResponse::StepOver(worker::step_over().await),
-            WorkerRequest::StepIn => WorkerResponse::StepIn(worker::step_in().await),
-            WorkerRequest::StepOut => WorkerResponse::StepOut(worker::step_out().await),
+            WorkerRequest::Run(options) => WorkerResponse::Run(worker::run(options).await),
             WorkerRequest::LoadDb(options) => {
                 WorkerResponse::LoadDb(worker::load_db(options).await)
             }

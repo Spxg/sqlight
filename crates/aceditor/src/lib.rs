@@ -28,11 +28,49 @@ mod bindgen {
         #[wasm_bindgen(method, js_name = getValue)]
         pub fn get_value(this: &Editor) -> String;
 
+        #[wasm_bindgen(method, js_name = clearSelection)]
+        pub fn clear_selection(this: &Editor);
+
         #[wasm_bindgen(method, js_name = setValue)]
         pub fn set_value(this: &Editor, value: String);
 
+        #[wasm_bindgen(method, js_name = getSession)]
+        pub fn get_session(this: &Editor) -> EditSession;
+
+        #[wasm_bindgen(method, js_name = getSelection)]
+        pub fn get_selection(this: &Editor) -> Selection;
+
         #[wasm_bindgen(method, js_name = getSelectedText)]
         pub fn get_selected_text(this: &Editor) -> String;
+
+        #[wasm_bindgen(method, js_name = setReadOnly)]
+        pub fn set_read_only(this: &Editor, value: bool);
+    }
+
+    #[wasm_bindgen]
+    extern "C" {
+        pub type Selection;
+
+        #[wasm_bindgen(method, js_name = getRange)]
+        pub fn get_range(this: &Selection) -> JsValue;
+    }
+
+    #[wasm_bindgen]
+    extern "C" {
+        pub type EditSession;
+
+        #[wasm_bindgen(method, js_name = setValue)]
+        pub fn set_value(this: &EditSession, value: String);
+
+        #[wasm_bindgen(method, js_name = getLength)]
+        pub fn get_length(this: &EditSession) -> usize;
+
+        #[wasm_bindgen(method, js_name = getTextRange)]
+        pub fn get_text_range(this: &EditSession, range: JsValue) -> String;
+
+        #[wasm_bindgen(method, js_name = getLine)]
+        pub fn get_line(this: &EditSession, row: usize) -> String;
+
     }
 
     #[wasm_bindgen]
@@ -79,6 +117,20 @@ impl EditorOptionsBuilder {
     pub fn build(self) -> EditorOptions {
         self.0
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Range {
+    pub start: Point,
+    pub end: Point,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Point {
+    pub row: usize,
+    pub column: usize,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -206,9 +258,32 @@ impl Editor {
 
     pub fn set_value(&self, value: String) {
         self.js.set_value(value);
+        self.js.clear_selection();
+    }
+
+    pub fn get_range(&self) -> Range {
+        serde_wasm_bindgen::from_value(self.js.get_selection().get_range()).unwrap()
     }
 
     pub fn get_selected_value(&self) -> String {
         self.js.get_selected_text()
+    }
+
+    pub fn set_read_only(&self, value: bool) {
+        self.js.set_read_only(value);
+    }
+
+    pub fn get_length(&self) -> usize {
+        self.js.get_session().get_length()
+    }
+
+    pub fn get_line(&self, row: usize) -> String {
+        self.js.get_session().get_line(row)
+    }
+
+    pub fn get_text_range(&self, range: Range) -> String {
+        self.js
+            .get_session()
+            .get_text_range(serde_wasm_bindgen::to_value(&range).unwrap())
     }
 }

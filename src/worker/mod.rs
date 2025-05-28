@@ -1,8 +1,8 @@
 mod sqlitend;
 
 use crate::{
-    DownloadDbResponse, LoadDbOptions, OpenOptions, PERSIST_VFS, PrepareOptions,
-    SQLiteStatementResult, WorkerError,
+    DownloadDbResponse, LoadDbOptions, OpenOptions, PERSIST_VFS, RunOptions, SQLiteRunResult,
+    WorkerError,
 };
 use once_cell::sync::Lazy;
 use sqlite_wasm_rs::{
@@ -10,7 +10,7 @@ use sqlite_wasm_rs::{
     mem_vfs::MemVfsUtil,
     utils::{copy_to_uint8_array, copy_to_vec},
 };
-use sqlitend::{SQLiteDb, SQLitePreparedStatement, SQLiteStatements};
+use sqlitend::SQLiteDb;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
@@ -30,19 +30,13 @@ struct FSUtil {
 }
 
 struct SQLiteWorker {
-    db: Option<Arc<SQLiteDb>>,
     open_options: OpenOptions,
     state: SQLiteState,
 }
 
 enum SQLiteState {
-    Idie,
-    Prepared(PreparedState),
-}
-
-struct PreparedState {
-    stmts: SQLiteStatements,
-    prepared: Option<SQLitePreparedStatement>,
+    NotOpened,
+    Opened(Arc<SQLiteDb>),
 }
 
 async fn with_worker<F, T>(mut f: F) -> Result<T>
@@ -100,7 +94,7 @@ pub async fn load_db(options: LoadDbOptions) -> Result<()> {
     let db = copy_to_vec(&options.data);
 
     with_worker(|worker| {
-        worker.db.take();
+        let _ = std::mem::replace(&mut worker.state, SQLiteState::NotOpened);
 
         let filename = &worker.open_options.filename;
         if worker.open_options.persist {
@@ -117,8 +111,7 @@ pub async fn load_db(options: LoadDbOptions) -> Result<()> {
             }
         }
 
-        worker.db = Some(SQLiteDb::open(&worker.open_options.uri())?);
-        worker.state = SQLiteState::Idie;
+        worker.state = SQLiteState::Opened(SQLiteDb::open(&worker.open_options.uri())?);
         Ok(())
     })
     .await
@@ -132,20 +125,19 @@ pub async fn open(options: OpenOptions) -> Result<()> {
         init_opfs_util().await?;
     }
 
-    let db = SQLiteDb::open(&options.uri())?;
+    let state = SQLiteState::Opened(SQLiteDb::open(&options.uri())?);
     let worker = SQLiteWorker {
-        db: Some(db),
         open_options: options,
-        state: SQLiteState::Idie,
+        state,
     };
     *locker = Some(worker);
     Ok(())
 }
 
-pub async fn prepare(options: PrepareOptions) -> Result<()> {
+pub async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
     with_worker(|worker| {
         if options.clear_on_prepare {
-            worker.db.take();
+            let _ = std::mem::replace(&mut worker.state, SQLiteState::NotOpened);
 
             let filename = &worker.open_options.filename;
             if worker.open_options.persist {
@@ -157,93 +149,17 @@ pub async fn prepare(options: PrepareOptions) -> Result<()> {
                 mem_vfs.delete_db(filename);
             }
 
-            worker.db = Some(SQLiteDb::open(&worker.open_options.uri())?);
+            worker.state = SQLiteState::Opened(SQLiteDb::open(&worker.open_options.uri())?);
         }
-
-        let stmts = worker
-            .db
-            .as_ref()
-            .ok_or(WorkerError::InvaildState)?
-            .prepare(&options.sql)?;
-        worker.state = SQLiteState::Prepared(PreparedState {
-            stmts,
-            prepared: None,
-        });
-        Ok(())
-    })
-    .await
-}
-
-pub async fn r#continue() -> Result<Vec<SQLiteStatementResult>> {
-    with_worker(|worker| {
-        let state = std::mem::replace(&mut worker.state, SQLiteState::Idie);
-        let mut result = match state {
-            SQLiteState::Idie => return Err(WorkerError::InvaildState),
-            SQLiteState::Prepared(prepared_state) => {
-                let mut result = vec![];
-                if let Some(stmt) = prepared_state.prepared {
-                    result.push(stmt.pack(stmt.get_all()?));
-                }
-                result.extend(prepared_state.stmts.stmts_result()?);
-                result
-            }
-        };
-        result.push(SQLiteStatementResult::Finish);
-        Ok(result)
-    })
-    .await
-}
-
-pub async fn step_over() -> Result<SQLiteStatementResult> {
-    with_worker(|worker| match &mut worker.state {
-        SQLiteState::Idie => Err(WorkerError::InvaildState),
-        SQLiteState::Prepared(prepared_state) => {
-            if let Some(prepared) = &mut prepared_state.prepared {
-                if let Some(value) = prepared.get_one()? {
-                    Ok(prepared.pack(Some(value)))
-                } else {
-                    let done = prepared.pack(None);
-                    prepared_state.prepared = None;
-                    Ok(done)
-                }
-            } else if let Some(prepared) = prepared_state.stmts.prepare_next()? {
-                Ok(prepared.pack(prepared.get_all()?))
-            } else {
-                Ok(SQLiteStatementResult::Finish)
-            }
-        }
-    })
-    .await
-}
-
-pub async fn step_in() -> Result<()> {
-    with_worker(|worker| {
-        match &mut worker.state {
-            SQLiteState::Idie => return Err(WorkerError::InvaildState),
-            SQLiteState::Prepared(prepared_state) => {
-                if prepared_state.prepared.is_some() {
-                    return Err(WorkerError::InvaildState);
-                }
-                let prepared = prepared_state
-                    .stmts
-                    .prepare_next()?
-                    .ok_or(WorkerError::InvaildState)?;
-                prepared_state.prepared = Some(prepared);
-            }
-        };
-        Ok(())
-    })
-    .await
-}
-
-pub async fn step_out() -> Result<SQLiteStatementResult> {
-    with_worker(|worker| match &mut worker.state {
-        SQLiteState::Idie => Err(WorkerError::InvaildState),
-        SQLiteState::Prepared(prepared_state) => {
-            if let Some(prepared) = prepared_state.prepared.take() {
-                Ok(prepared.pack(prepared.get_all()?))
-            } else {
-                Err(WorkerError::InvaildState)
+        match &worker.state {
+            SQLiteState::NotOpened => Err(WorkerError::InvaildState),
+            SQLiteState::Opened(sqlite_db) => {
+                let stmts = sqlite_db.prepare(&options.sql)?;
+                let result = stmts.stmts_result()?;
+                Ok(SQLiteRunResult {
+                    embed: options.embed,
+                    result,
+                })
             }
         }
     })

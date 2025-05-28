@@ -48,11 +48,11 @@ pub struct GlobalState {
     #[serde(skip)]
     share_href: Option<String>,
     #[serde(skip)]
-    share_sql_with_result: Option<String>,
-    #[serde(skip)]
     show_something: bool,
     #[serde(skip)]
     output: Vec<SQLiteStatementResult>,
+    #[serde(skip)]
+    embed: Vec<SQLiteStatementResult>,
     #[serde(skip)]
     last_error: Option<FragileComfirmed<SQLightError>>,
     #[serde(skip)]
@@ -77,9 +77,9 @@ impl Default for GlobalState {
             is_focused: false,
             opened_focus: HashSet::new(),
             share_href: None,
-            share_sql_with_result: None,
             show_something: false,
-            output: Vec::new(),
+            output: vec![],
+            embed: vec![],
             last_error: None,
             import_progress: None,
             exported: None,

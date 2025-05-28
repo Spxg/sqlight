@@ -3,9 +3,7 @@ use std::{sync::Arc, time::Duration};
 use istyles::istyles;
 use leptos::prelude::*;
 use reactive_stores::Store;
-use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{Blob, BlobPropertyBag, Url};
 
 use crate::app::{GlobalState, GlobalStateStoreFields, icon::clipboard_icon};
 
@@ -59,54 +57,10 @@ fn EmbeddedLinks() -> impl IntoView {
 }
 
 #[component]
-fn SQLWithResultLinks() -> impl IntoView {
-    let state = expect_context::<Store<GlobalState>>();
-
-    let shared = move || {
-        state
-            .share_sql_with_result()
-            .get_untracked()
-            .unwrap_or_default()
-    };
-
-    let href = move || {
-        let text = state
-            .share_sql_with_result()
-            .get_untracked()
-            .unwrap_or_default();
-        let string_array = js_sys::Array::new();
-        string_array.push(&JsValue::from(text));
-
-        let blob_properties = BlobPropertyBag::new();
-        blob_properties.set_type("text/plain;charset=UTF-8");
-
-        let blob =
-            Blob::new_with_str_sequence_and_options(&string_array, &blob_properties).unwrap();
-
-        let url = Url::create_object_url_with_blob(&blob).unwrap();
-        let url1 = url.clone();
-
-        set_timeout(
-            move || Url::revoke_object_url(&url1).unwrap(),
-            Duration::from_millis(5000),
-        );
-
-        url
-    };
-
-    view! {
-        <Copied shared=shared href=href>
-            "[Need run first] Copy sql with result"
-        </Copied>
-    }
-}
-
-#[component]
 pub fn Share() -> impl IntoView {
     view! {
         <>
             <EmbeddedLinks />
-            <SQLWithResultLinks />
         </>
     }
 }

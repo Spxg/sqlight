@@ -22,11 +22,10 @@ pub fn PopButton<B, M>(
 ) -> impl IntoView
 where
     B: FnOnce(Box<dyn FnMut(MouseEvent) + Send>, NodeRef<html::element::Button>) -> AnyView,
-    M: Fn(Box<dyn Fn()>) -> AnyView + Send + Sync + 'static,
+    M: Fn(WriteSignal<bool>) -> AnyView + Send + Sync + 'static,
 {
     let (is_open, set_open) = signal(false);
     let toggle = move || set_open.set(!is_open.get());
-    let close = move || set_open.set(false);
 
     let arrow_ref = NodeRef::<html::element::Div>::new();
     let reference_ref = NodeRef::<html::element::Button>::new();
@@ -202,7 +201,7 @@ where
                         </svg>
                     </div>
                     <div node_ref=menu_ref>
-                        <div>{menu_clone(Box::new(close))}</div>
+                        <div>{menu_clone(set_open)}</div>
                     </div>
                 </div>
             </Show>
