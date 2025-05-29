@@ -121,8 +121,11 @@ async fn load_db(options: LoadDbOptions) -> Result<()> {
     let db = copy_to_vec(&options.data);
 
     #[cfg(feature = "sqlite3")]
-    sqlite_wasm_rs::utils::check_import_db(&db)
+    let page_size = sqlite_wasm_rs::utils::check_import_db(&db)
         .map_err(|err| WorkerError::LoadDb(format!("{err}")))?;
+
+    #[cfg(feature = "sqlite3mc")]
+    let page_size = 65536;
 
     with_worker(|worker| {
         drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
@@ -138,7 +141,7 @@ async fn load_db(options: LoadDbOptions) -> Result<()> {
         } else {
             let mem_vfs = &FS_UTIL.mem;
             mem_vfs.delete_db(filename);
-            if let Err(err) = mem_vfs.import_db_unchecked(filename, &db, 114514 /* unused */) {
+            if let Err(err) = mem_vfs.import_db_unchecked(filename, &db, page_size) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
             }
         }
