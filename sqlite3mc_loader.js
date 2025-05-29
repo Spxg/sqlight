@@ -1,0 +1,1 @@
+import init from './sqlite3mc.js';await init();

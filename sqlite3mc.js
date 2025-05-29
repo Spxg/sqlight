@@ -1,4 +1,4 @@
-import { JSUtils } from './snippets/sqlite-wasm-rs-7363ec544fce135b/src/vfs/utils.js';
+import { JSArrayBufferCopy } from './snippets/wasm-array-cp-201e2a98f0e691f7/copy.min.js';
 
 let wasm;
 
@@ -227,15 +227,15 @@ function debugString(val) {
     return className;
 }
 function __wbg_adapter_44(arg0, arg1, arg2) {
-    wasm.closure88_externref_shim(arg0, arg1, arg2);
+    wasm.closure30_externref_shim(arg0, arg1, arg2);
 }
 
 function __wbg_adapter_47(arg0, arg1, arg2) {
-    wasm.closure694_externref_shim(arg0, arg1, arg2);
+    wasm.closure861_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_244(arg0, arg1, arg2, arg3) {
-    wasm.closure716_externref_shim(arg0, arg1, arg2, arg3);
+function __wbg_adapter_240(arg0, arg1, arg2, arg3) {
+    wasm.closure883_externref_shim(arg0, arg1, arg2, arg3);
 }
 
 const __wbindgen_enum_ReadableStreamType = ["bytes"];
@@ -672,7 +672,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_244(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_240(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -867,15 +867,15 @@ function __wbg_get_imports() {
         const ret = arg0.then(arg1, arg2);
         return ret;
     };
-    imports.wbg.__wbg_toSlice_543b72cb118ed345 = function(arg0, arg1, arg2, arg3) {
-        JSUtils.toSlice(arg0, arg1, arg2 >>> 0, arg3 >>> 0);
-    };
     imports.wbg.__wbg_toString_ba82658ec370add0 = function() { return handleError(function (arg0, arg1) {
         const ret = arg0.toString(arg1);
         return ret;
     }, arguments) };
-    imports.wbg.__wbg_toUint8Array_ee685a679892191f = function(arg0, arg1, arg2, arg3) {
-        JSUtils.toUint8Array(arg0, arg1 >>> 0, arg2 >>> 0, arg3);
+    imports.wbg.__wbg_toU8Array_7fa7fb3ae8554ad0 = function(arg0, arg1, arg2, arg3) {
+        JSArrayBufferCopy.toU8Array(arg0, arg1 >>> 0, arg2 >>> 0, arg3);
+    };
+    imports.wbg.__wbg_toU8Slice_11519abfa5176ae4 = function(arg0, arg1, arg2, arg3) {
+        JSArrayBufferCopy.toU8Slice(arg0, arg1, arg2 >>> 0, arg3 >>> 0);
     };
     imports.wbg.__wbg_truncate_29261a6365c72b01 = function() { return handleError(function (arg0, arg1) {
         arg0.truncate(arg1 >>> 0);
@@ -924,12 +924,12 @@ function __wbg_get_imports() {
         const ret = false;
         return ret;
     };
-    imports.wbg.__wbindgen_closure_wrapper268 = function(arg0, arg1, arg2) {
-        const ret = makeClosure(arg0, arg1, 89, __wbg_adapter_44);
+    imports.wbg.__wbindgen_closure_wrapper193 = function(arg0, arg1, arg2) {
+        const ret = makeClosure(arg0, arg1, 31, __wbg_adapter_44);
         return ret;
     };
-    imports.wbg.__wbindgen_closure_wrapper4293 = function(arg0, arg1, arg2) {
-        const ret = makeMutClosure(arg0, arg1, 695, __wbg_adapter_47);
+    imports.wbg.__wbindgen_closure_wrapper4096 = function(arg0, arg1, arg2) {
+        const ret = makeMutClosure(arg0, arg1, 862, __wbg_adapter_47);
         return ret;
     };
     imports.wbg.__wbindgen_debug_string = function(arg0, arg1) {
@@ -1064,7 +1064,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (typeof module_or_path === 'undefined') {
-        module_or_path = new URL('worker_bg.wasm', import.meta.url);
+        module_or_path = new URL('sqlite3mc_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 
