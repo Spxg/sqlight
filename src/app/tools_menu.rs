@@ -21,7 +21,7 @@ where
             <a href="https://sqlite-internal.pages.dev" target="_blank">
                 <ButtonMenuItem name="SQLite internal".into() on_click=on_internal>
                     <MenuAside>
-                        "This tool helps you explore the SQLite file format internals."
+                        "This tool helps you explore the SQLite file format internals (encrypted db is not supported)."
                     </MenuAside>
                 </ButtonMenuItem>
             </a>
