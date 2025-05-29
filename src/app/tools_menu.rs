@@ -16,12 +16,12 @@ where
                 <MenuAside>"https://crates.io/crates/sqlformat"</MenuAside>
             </ButtonMenuItem>
             <ButtonMenuItem name="Embed Query Result".into() on_click=on_embed>
-                <MenuAside>"https://crates.io/crates/prettytable-rs"</MenuAside>
+                <MenuAside>"Embed results into query statements for easy sharing."</MenuAside>
             </ButtonMenuItem>
             <a href="https://sqlite-internal.pages.dev" target="_blank">
                 <ButtonMenuItem name="SQLite internal".into() on_click=on_internal>
                     <MenuAside>
-                        "This tool helps you explore the SQLite file format internals"
+                        "This tool helps you explore the SQLite file format internals."
                     </MenuAside>
                 </ButtonMenuItem>
             </a>

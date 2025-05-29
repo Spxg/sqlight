@@ -15,7 +15,7 @@ where
                 <MenuAside>"The KEEP CONTEXT will be automatically enabled."</MenuAside>
             </ButtonMenuItem>
             <ButtonMenuItem name="Download".into() on_click=download>
-                <MenuAside>"Will be downloaded as test.db"</MenuAside>
+                <MenuAside>"Will be downloaded as test.db."</MenuAside>
             </ButtonMenuItem>
         </MenuGroup>
     }
