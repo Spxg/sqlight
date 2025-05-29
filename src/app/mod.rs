@@ -21,5 +21,5 @@ mod state;
 mod tools_menu;
 mod vfs_menu;
 
-pub use playground::playground;
+pub use playground::Playground;
 pub use state::*;

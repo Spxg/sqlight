@@ -21,6 +21,7 @@ use crate::{
         tools_menu::ToolsMenu,
         vfs_menu::VfsMenu,
     },
+    send_request,
 };
 
 istyles!(styles, "assets/module.postcss/header.module.css.map");
@@ -90,8 +91,9 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
         let run_selected_code =
             !selected_code.is_empty() && state.run_selected_sql().get_untracked();
 
-        if let Some(worker) = &*state.worker().read_untracked() {
-            worker.send_task(WorkerRequest::Run(RunOptions {
+        send_request(
+            state,
+            WorkerRequest::Run(RunOptions {
                 embed: false,
                 sql: if run_selected_code {
                     selected_code
@@ -99,8 +101,8 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
                     code
                 },
                 clear_on_prepare: !*state.keep_ctx().read_untracked(),
-            }));
-        }
+            }),
+        );
     })
 }
 
@@ -248,13 +250,14 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
         let sql = editor.get_value();
         drop(editor_guard);
 
-        if let Some(worker) = &*state.worker().read_untracked() {
-            worker.send_task(WorkerRequest::Run(RunOptions {
+        send_request(
+            state,
+            WorkerRequest::Run(RunOptions {
                 embed: true,
                 sql,
                 clear_on_prepare: !*state.keep_ctx().read_untracked(),
-            }));
-        }
+            }),
+        );
 
         signal.set(false);
     };
@@ -339,9 +342,7 @@ fn DatabaseButton(
                         let result = reader.result().unwrap();
                         let array_buffer = result.unchecked_into::<js_sys::ArrayBuffer>();
                         let data = js_sys::Uint8Array::new(&array_buffer);
-                        if let Some(worker) = &*state.worker().read_untracked() {
-                            worker.send_task(WorkerRequest::LoadDb(LoadDbOptions { data }));
-                        }
+                        send_request(state, WorkerRequest::LoadDb(LoadDbOptions { data }));
                     })
                         as Box<dyn FnMut(_)>));
 
@@ -415,9 +416,7 @@ fn DatabaseButton(
     });
 
     let on_download = move |_: MouseEvent, signal: WriteSignal<bool>| {
-        if let Some(worker) = &*state.worker().read() {
-            worker.send_task(WorkerRequest::DownloadDb);
-        }
+        send_request(state, WorkerRequest::DownloadDb);
         signal.set(false);
     };
 

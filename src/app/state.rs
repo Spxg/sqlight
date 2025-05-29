@@ -7,7 +7,7 @@ use reactive_stores::Store;
 use serde::{Deserialize, Serialize};
 use web_sys::MediaQueryList;
 
-use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult, WorkerHandle};
+use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult};
 
 const DEFAULT_CODE: &str = "PRAGMA page_size=4096;
 
@@ -34,9 +34,8 @@ pub struct GlobalState {
     keep_ctx: bool,
     sql: String,
     run_selected_sql: bool,
+    multiple_ciphers: bool,
     // runtime state below
-    #[serde(skip)]
-    worker: Option<WorkerHandle>,
     #[serde(skip)]
     editor: Option<Editor>,
     #[serde(skip)]
@@ -71,7 +70,7 @@ impl Default for GlobalState {
             keep_ctx: false,
             sql: DEFAULT_CODE.into(),
             run_selected_sql: false,
-            worker: None,
+            multiple_ciphers: false,
             editor: None,
             focus: None,
             is_focused: false,

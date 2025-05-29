@@ -1,18 +1,20 @@
 pub mod app;
+#[cfg(any(feature = "sqlite3", feature = "sqlite3mc"))]
 pub mod worker;
 
 use aceditor::EditorError;
-use app::{Exported, GlobalState, GlobalStateStoreFields};
+use app::{Exported, GlobalState, GlobalStateStoreFields, Vfs};
 use fragile::Fragile;
 use js_sys::Uint8Array;
 use leptos::prelude::*;
 use reactive_stores::Store;
 use std::{
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{Arc, Once},
 };
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::{OnceCell, mpsc::UnboundedReceiver};
 use wasm_bindgen::{JsCast, prelude::Closure};
+use wasm_bindgen_futures::spawn_local;
 use web_sys::{MessageEvent, Worker, WorkerOptions, WorkerType};
 
 use serde::{Deserialize, Serialize};
@@ -50,8 +52,6 @@ impl<T> DerefMut for FragileComfirmed<T> {
         self.fragile.get_mut()
     }
 }
-
-pub const PERSIST_VFS: &str = "sqlight-sahpool";
 
 #[derive(thiserror::Error, Debug)]
 pub enum SQLightError {
@@ -127,16 +127,6 @@ pub struct LoadDbOptions {
     pub data: Uint8Array,
 }
 
-impl OpenOptions {
-    pub fn uri(&self) -> String {
-        format!(
-            "file:{}?vfs={}",
-            self.filename,
-            if self.persist { PERSIST_VFS } else { "memvfs" }
-        )
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RunOptions {
     pub sql: String,
@@ -209,9 +199,55 @@ impl WorkerHandle {
 unsafe impl Send for WorkerHandle {}
 unsafe impl Sync for WorkerHandle {}
 
-pub async fn setup_worker() -> (WorkerHandle, UnboundedReceiver<WorkerResponse>) {
-    let uri = "./worker_loader.js";
+fn send_request(state: Store<GlobalState>, req: WorkerRequest) {
+    spawn_local(async move {
+        if state.multiple_ciphers().get_untracked() {
+            sqlite3mc(state).await
+        } else {
+            sqlite3(state).await
+        }
+        .send_task(req);
+    });
+}
 
+async fn sqlite3mc(state: Store<GlobalState>) -> &'static WorkerHandle {
+    static ONCE: Once = Once::new();
+    static WORKER: OnceCell<WorkerHandle> = OnceCell::const_new();
+
+    let worker = WORKER
+        .get_or_init(|| async { setup_worker(state, "./sqlite3mc_loader.js").await })
+        .await;
+
+    ONCE.call_once(|| {
+        connect_db(state, worker);
+        Effect::new(move || connect_db(state, worker));
+    });
+    worker
+}
+
+async fn sqlite3(state: Store<GlobalState>) -> &'static WorkerHandle {
+    static ONCE: Once = Once::new();
+    static WORKER: OnceCell<WorkerHandle> = OnceCell::const_new();
+
+    let worker = WORKER
+        .get_or_init(|| async { setup_worker(state, "./sqlite3_loader.js").await })
+        .await;
+
+    ONCE.call_once(|| {
+        connect_db(state, worker);
+        Effect::new(move || connect_db(state, worker));
+    });
+    worker
+}
+
+fn connect_db(state: Store<GlobalState>, handle: &'static WorkerHandle) {
+    handle.send_task(crate::WorkerRequest::Open(crate::OpenOptions {
+        filename: "test.db".into(),
+        persist: *state.vfs().read() == Vfs::OPFS,
+    }));
+}
+
+async fn setup_worker(state: Store<GlobalState>, uri: &str) -> WorkerHandle {
     let opts = WorkerOptions::new();
     opts.set_type(WorkerType::Module);
 
@@ -233,14 +269,16 @@ pub async fn setup_worker() -> (WorkerHandle, UnboundedReceiver<WorkerResponse>)
         }
     });
 
+    spawn_local(handle_state(state, rx));
+
     worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
     on_message.forget();
     wait.notified().await;
 
-    (WorkerHandle(worker), rx)
+    WorkerHandle(worker)
 }
 
-pub async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<WorkerResponse>) {
+async fn handle_state(state: Store<GlobalState>, mut rx: UnboundedReceiver<WorkerResponse>) {
     while let Some(resp) = rx.recv().await {
         state.last_error().set(None);
 

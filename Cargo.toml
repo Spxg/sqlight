@@ -18,14 +18,14 @@ aceditor = { path = "crates/aceditor" }
 split-grid = { path = "crates/split-grid" }
 floating-ui = { path = "crates/floating-ui" }
 
-sqlite-wasm-rs = { version = "0.3.6", default-features = false, features = ["precompiled"] }
+sqlite-wasm-rs = { git = "https://github.com/Spxg/sqlite-wasm-rs", default-features = false, optional = true }
 console_error_panic_hook = "0.1.7"
 leptos = { version = "0.8.2", features = ["csr"] }
 reactive_stores = "0.2.2"
 thiserror = "2.0.12"
 serde = "1.0.219"
 serde_json = "1.0.140"
-web-sys = { version = "0.3.77", features = ["BlobPropertyBag", "Clipboard", "DedicatedWorkerGlobalScope", "File", "FileList", "HtmlSelectElement", "MediaQueryList", "Navigator", "Storage", "Worker", "WorkerOptions", "WorkerType"] }
+web-sys = { version = "0.3.77", features = ["BlobPropertyBag", "Clipboard", "DedicatedWorkerGlobalScope", "DomException", "File", "FileList", "HtmlSelectElement", "MediaQueryList", "Navigator", "Storage", "Worker", "WorkerOptions", "WorkerType"] }
 serde-wasm-bindgen = "0.6.5"
 parking_lot = "0.12.3"
 once_cell = "1.21.3"
@@ -39,3 +39,8 @@ fragile = "2.0.1"
 hex = "0.4.3"
 prettytable-rs = "0.10.0"
 sqlformat = "0.3.5"
+
+[features]
+default = ["sqlite3"]
+sqlite3 = ["sqlite-wasm-rs/precompiled"]
+sqlite3mc = ["sqlite-wasm-rs/sqlite3mc"]

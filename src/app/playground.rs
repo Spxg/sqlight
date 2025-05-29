@@ -6,9 +6,7 @@ use leptos::tachys::html;
 use prettytable::{Cell, Row, Table};
 use reactive_stores::Store;
 use split_grid::{Gutter, SplitOptions};
-use tokio::sync::mpsc::UnboundedReceiver;
 use wasm_bindgen::{JsCast, prelude::Closure};
-use wasm_bindgen_futures::spawn_local;
 use web_sys::wasm_bindgen::JsValue;
 
 use crate::{
@@ -18,43 +16,34 @@ use crate::{
         editor::Editor,
         header::Header,
         output::{Output, change_focus},
-        state::{GlobalState, GlobalStateStoreFields, Orientation, Theme, Vfs},
+        state::{GlobalState, GlobalStateStoreFields, Orientation, Theme},
     },
 };
-use crate::{WorkerHandle, WorkerResponse, handle_state};
 
 istyles!(styles, "assets/module.postcss/playground.module.css.map");
 
-pub fn playground(
-    worker: (WorkerHandle, UnboundedReceiver<WorkerResponse>),
-) -> Box<dyn FnOnce() -> AnyView + 'static> {
-    Box::new(move || {
-        let (worker_handle, rx) = worker;
-        let state = GlobalState::load().unwrap_or_default();
-        provide_context(Store::new(state));
+#[component]
+pub fn Playground() -> impl IntoView {
+    let state = GlobalState::load().unwrap_or_default();
+    provide_context(Store::new(state));
 
-        let state = expect_context::<Store<GlobalState>>();
-        state.worker().set(Some(worker_handle));
+    let state = expect_context::<Store<GlobalState>>();
 
-        handle_last_error(state);
-        handle_system_theme(state);
-        handle_automic_orientation(state);
-        handle_connect_db(state);
-        handle_save_state(state);
-        handle_import_progress(state);
-        handle_ace_config(state);
-        handle_embed_query_result(state);
+    handle_last_error(state);
+    handle_system_theme(state);
+    handle_automic_orientation(state);
+    handle_save_state(state);
+    handle_import_progress(state);
+    handle_ace_config(state);
+    handle_embed_query_result(state);
 
-        spawn_local(handle_state(state, rx));
-
-        view! {
-            <div id="playground" class=styles::container>
-                <Header />
-                <ResizableArea />
-            </div>
-        }
-        .into_any()
-    })
+    view! {
+        <div id="playground" class=styles::container>
+            <Header />
+            <ResizableArea />
+        </div>
+    }
+    .into_any()
 }
 
 fn handle_embed_query_result(state: Store<GlobalState>) {
@@ -154,19 +143,9 @@ fn handle_save_state(state: Store<GlobalState>) {
         state.keep_ctx().track();
         state.sql().track();
         state.run_selected_sql().track();
+        state.multiple_ciphers().track();
 
         state.read_untracked().save();
-    });
-}
-
-fn handle_connect_db(state: Store<GlobalState>) {
-    Effect::new(move || {
-        if let Some(worker) = &*state.worker().read() {
-            worker.send_task(crate::WorkerRequest::Open(crate::OpenOptions {
-                filename: "test.db".into(),
-                persist: *state.vfs().read() == Vfs::OPFS,
-            }));
-        }
     });
 }
 

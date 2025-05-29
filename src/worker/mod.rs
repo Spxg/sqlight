@@ -1,8 +1,8 @@
 mod sqlitend;
 
 use crate::{
-    DownloadDbResponse, LoadDbOptions, OpenOptions, PERSIST_VFS, RunOptions, SQLiteRunResult,
-    WorkerError,
+    DownloadDbResponse, LoadDbOptions, OpenOptions, RunOptions, SQLiteRunResult, WorkerError,
+    WorkerRequest, WorkerResponse,
 };
 use once_cell::sync::Lazy;
 use sqlite_wasm_rs::{
@@ -14,6 +14,10 @@ use sqlitend::SQLiteDb;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
+use tokio::sync::mpsc::UnboundedReceiver;
+use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
+use wasm_bindgen_futures::spawn_local;
+use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
 type Result<T> = std::result::Result<T, WorkerError>;
 
@@ -23,6 +27,29 @@ static FS_UTIL: Lazy<FSUtil> = Lazy::new(|| FSUtil {
     mem: MemVfsUtil::new(),
     opfs: OnceCell::new(),
 });
+
+#[cfg(feature = "sqlite3")]
+const OPFS_VFS: &str = "opfs";
+#[cfg(feature = "sqlite3mc")]
+const OPFS_VFS: &str = "multipleciphers-opfs";
+
+#[cfg(feature = "sqlite3")]
+const OPFS_VFS_DIR: &str = "sqlight-sahpool";
+#[cfg(feature = "sqlite3mc")]
+const OPFS_VFS_DIR: &str = "sqlight-sahpool-mc";
+
+#[cfg(feature = "sqlite3")]
+const MEM_VFS: &str = "memvfs";
+#[cfg(feature = "sqlite3mc")]
+const MEM_VFS: &str = "multipleciphers-memvfs";
+
+fn uri(filename: &str, persist: bool) -> String {
+    format!(
+        "file:{}?vfs={}",
+        filename,
+        if persist { OPFS_VFS } else { MEM_VFS }
+    )
+}
 
 struct FSUtil {
     mem: MemVfsUtil,
@@ -53,8 +80,8 @@ async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
             sqlite_wasm_rs::sahpool_vfs::install(
                 Some(
                     &OpfsSAHPoolCfgBuilder::new()
-                        .directory(PERSIST_VFS)
-                        .vfs_name(PERSIST_VFS)
+                        .directory(OPFS_VFS_DIR)
+                        .vfs_name("opfs")
                         .build(),
                 ),
                 false,
@@ -69,7 +96,7 @@ fn get_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
     FS_UTIL.opfs.get().ok_or(WorkerError::Unexpected)
 }
 
-pub async fn download_db() -> Result<DownloadDbResponse> {
+async fn download_db() -> Result<DownloadDbResponse> {
     with_worker(|worker| {
         let filename = &worker.open_options.filename;
         let db = if worker.open_options.persist {
@@ -90,34 +117,42 @@ pub async fn download_db() -> Result<DownloadDbResponse> {
     .await
 }
 
-pub async fn load_db(options: LoadDbOptions) -> Result<()> {
+async fn load_db(options: LoadDbOptions) -> Result<()> {
     let db = copy_to_vec(&options.data);
 
+    #[cfg(feature = "sqlite3")]
+    sqlite_wasm_rs::utils::check_import_db(&db)
+        .map_err(|err| WorkerError::LoadDb(format!("{err}")))?;
+
     with_worker(|worker| {
-        let _ = std::mem::replace(&mut worker.state, SQLiteState::NotOpened);
+        drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
 
         let filename = &worker.open_options.filename;
         if worker.open_options.persist {
             let opfs = get_opfs_util()?;
             opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
-            if let Err(err) = opfs.import_db(filename, &db) {
+
+            if let Err(err) = opfs.import_db_unchecked(filename, &db) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
             }
         } else {
             let mem_vfs = &FS_UTIL.mem;
             mem_vfs.delete_db(filename);
-            if let Err(err) = mem_vfs.import_db(filename, &db) {
+            if let Err(err) = mem_vfs.import_db_unchecked(filename, &db, 114514 /* unused */) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
             }
         }
 
-        worker.state = SQLiteState::Opened(SQLiteDb::open(&worker.open_options.uri())?);
+        worker.state = SQLiteState::Opened(SQLiteDb::open(&uri(
+            &worker.open_options.filename,
+            worker.open_options.persist,
+        ))?);
         Ok(())
     })
     .await
 }
 
-pub async fn open(options: OpenOptions) -> Result<()> {
+async fn open(options: OpenOptions) -> Result<()> {
     let mut locker = DB.lock().await;
     locker.take();
 
@@ -125,7 +160,7 @@ pub async fn open(options: OpenOptions) -> Result<()> {
         init_opfs_util().await?;
     }
 
-    let state = SQLiteState::Opened(SQLiteDb::open(&options.uri())?);
+    let state = SQLiteState::Opened(SQLiteDb::open(&uri(&options.filename, options.persist))?);
     let worker = SQLiteWorker {
         open_options: options,
         state,
@@ -134,10 +169,10 @@ pub async fn open(options: OpenOptions) -> Result<()> {
     Ok(())
 }
 
-pub async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
+async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
     with_worker(|worker| {
         if options.clear_on_prepare {
-            let _ = std::mem::replace(&mut worker.state, SQLiteState::NotOpened);
+            drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
 
             let filename = &worker.open_options.filename;
             if worker.open_options.persist {
@@ -149,7 +184,10 @@ pub async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
                 mem_vfs.delete_db(filename);
             }
 
-            worker.state = SQLiteState::Opened(SQLiteDb::open(&worker.open_options.uri())?);
+            worker.state = SQLiteState::Opened(SQLiteDb::open(&uri(
+                &worker.open_options.filename,
+                worker.open_options.persist,
+            ))?);
         }
         match &worker.state {
             SQLiteState::NotOpened => Err(WorkerError::InvaildState),
@@ -164,4 +202,39 @@ pub async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
         }
     })
     .await
+}
+
+async fn execute_task(scope: DedicatedWorkerGlobalScope, mut rx: UnboundedReceiver<JsValue>) {
+    while let Some(request) = rx.recv().await {
+        let request = serde_wasm_bindgen::from_value::<WorkerRequest>(request).unwrap();
+        let resp = match request {
+            WorkerRequest::Open(options) => WorkerResponse::Open(open(options).await),
+            WorkerRequest::Run(options) => WorkerResponse::Run(run(options).await),
+            WorkerRequest::LoadDb(options) => WorkerResponse::LoadDb(load_db(options).await),
+            WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(download_db().await),
+        };
+        if let Err(err) = scope.post_message(&serde_wasm_bindgen::to_value(&resp).unwrap()) {
+            log::error!("Failed to send task to window: {resp:?}, {err:?}");
+        }
+    }
+}
+
+pub fn entry() {
+    console_error_panic_hook::set_once();
+    console_log::init_with_level(log::Level::Debug).unwrap();
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<JsValue>();
+
+    let scope: DedicatedWorkerGlobalScope = JsValue::from(js_sys::global()).into();
+    spawn_local(execute_task(scope.clone(), rx));
+
+    let on_message = Closure::<dyn Fn(MessageEvent)>::new(move |ev: MessageEvent| {
+        tx.send(ev.data()).unwrap();
+    });
+
+    scope.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    scope
+        .post_message(&serde_wasm_bindgen::to_value(&WorkerResponse::Ready).unwrap())
+        .expect("Faild to send ready to window");
+    on_message.forget();
 }

@@ -53,8 +53,9 @@
     <link data-trunk href="./assets/module.postcss/output/section.module.css" rel="css">
     <link data-trunk href="./assets/module.postcss/output/share.module.css" rel="css">
 
-    <link data-trunk rel="rust" href="Cargo.toml" data-bin="app" data-type="main" />
-    <link data-trunk rel="rust" href="Cargo.toml" data-bin="worker" data-type="worker" data-loader-shim data-bindgen-target="web" />
+    <link data-trunk rel="rust" href="Cargo.toml" data-cargo-no-default-features data-bin="app" data-type="main" />
+    <link data-trunk rel="rust" href="Cargo.toml" data-cargo-no-default-features data-cargo-features="sqlite3" data-bin="sqlite3" data-type="worker" data-loader-shim data-bindgen-target="web" />
+    <link data-trunk rel="rust" href="Cargo.toml" data-cargo-no-default-features data-cargo-features="sqlite3mc" data-bin="sqlite3mc" data-type="worker" data-loader-shim data-bindgen-target="web" />
   </head>
   <body></body>
 </html>

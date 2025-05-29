@@ -13,6 +13,7 @@ istyles!(
 
 #[component]
 pub fn Either<E, V, T>(
+    #[prop(default =None)] aside: Option<AnyView>,
     on_change: E,
     id: String,
     a: T,
@@ -58,7 +59,7 @@ where
     let b2 = Arc::clone(&b1);
 
     view! {
-        <ConfigElement name=name is_default=is_default>
+        <ConfigElement name=name is_default=is_default aside>
             <div class=styles::toggle>
                 <input
                     id=a_id.clone()
@@ -105,6 +106,7 @@ where
 #[component]
 pub fn ConfigElement(
     name: String,
+    #[prop(default =None)] aside: Option<AnyView>,
     #[prop(default = Box::new(|| true))] is_default: Box<dyn Fn() -> bool + Send>,
     children: Children,
 ) -> impl IntoView {
@@ -121,6 +123,7 @@ pub fn ConfigElement(
                 <span class=style>{name}</span>
                 <div class=styles::value>{children()}</div>
             </div>
+            {aside}
         </MenuItem>
     }
 }
