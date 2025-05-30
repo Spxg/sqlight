@@ -251,8 +251,6 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
         let sql = editor.get_value();
         drop(editor_guard);
 
-        std::mem::take(&mut *state.output().write());
-
         send_request(
             state,
             WorkerRequest::Run(RunOptions {
