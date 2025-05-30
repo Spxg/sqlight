@@ -87,6 +87,7 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
 
         state.sql().set(code.clone());
         change_focus(state, Some(Focus::Execute));
+        std::mem::take(&mut *state.output().write());
 
         let run_selected_code =
             !selected_code.is_empty() && state.run_selected_sql().get_untracked();
@@ -249,6 +250,8 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
         };
         let sql = editor.get_value();
         drop(editor_guard);
+
+        std::mem::take(&mut *state.output().write());
 
         send_request(
             state,
