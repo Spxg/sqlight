@@ -1866,7 +1866,7 @@ dependencies = [
 [[package]]
 name = "sqlite-wasm-rs"
 version = "0.3.6"
-source = "git+https://github.com/Spxg/sqlite-wasm-rs#81a8c64eabe9833861d0bea22fa83883da62455c"
+source = "git+https://github.com/Spxg/sqlite-wasm-rs#229d462bffc0cb404ad12ad8e785cf52425fefda"
 dependencies = [
  "cc",
  "fragile",
