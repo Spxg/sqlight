@@ -542,7 +542,7 @@ function __wbg_get_imports() {
         const ret = arg0.getMonth();
         return ret;
     };
-    imports.wbg.__wbg_getRandomValues_9cf8a9a052847419 = function() { return handleError(function (arg0, arg1) {
+    imports.wbg.__wbg_getRandomValues_4222c05e65c4cb4d = function() { return handleError(function (arg0, arg1) {
         globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
     }, arguments) };
     imports.wbg.__wbg_getSeconds_755197b634cca692 = function(arg0) {
@@ -751,7 +751,7 @@ function __wbg_get_imports() {
         const ret = arg0.next();
         return ret;
     }, arguments) };
-    imports.wbg.__wbg_now_ffb89993ffe8c9e9 = function(arg0) {
+    imports.wbg.__wbg_now_7b5abb0a69e028e7 = function(arg0) {
         const ret = globalThis.performance.now();
         getDataViewMemory0().setFloat64(arg0 + 8 * 1, isLikeNone(ret) ? 0 : ret, true);
         getDataViewMemory0().setInt32(arg0 + 4 * 0, !isLikeNone(ret), true);
