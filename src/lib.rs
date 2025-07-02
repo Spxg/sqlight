@@ -265,7 +265,7 @@ async fn setup_worker(state: Store<GlobalState>, uri: &str) -> WorkerHandle {
         match serde_wasm_bindgen::from_value(ev.data()) {
             Ok(WorkerResponse::Ready) => notify.notify_one(),
             Ok(resp) => tx.send(resp).unwrap(),
-            Err(err) => log::error!("Failed to parse message {:?}", err),
+            Err(err) => log::error!("Failed to parse message {err:?}"),
         }
     });
 

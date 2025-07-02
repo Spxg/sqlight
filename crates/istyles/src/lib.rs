@@ -10,7 +10,7 @@ pub fn istyles(input: TokenStream) -> TokenStream {
     let value: Value = match serde_json::from_str(&css_module_map) {
         Ok(v) => v,
         Err(e) => {
-            return syn::Error::new_spanned(css_module_map, format!("Invalid JSON: {}", e))
+            return syn::Error::new_spanned(css_module_map, format!("Invalid JSON: {e}"))
                 .to_compile_error()
                 .into();
         }
@@ -32,7 +32,7 @@ fn parse_input(input: syn::parse::ParseStream) -> syn::Result<(String, syn::Iden
     let path: LitStr = input.parse()?;
     let path = path.value();
     let json = std::fs::read_to_string(&path)
-        .map_err(|e| syn::Error::new_spanned(&path, format!("Failed to read JSON: {:?}", e)))?;
+        .map_err(|e| syn::Error::new_spanned(&path, format!("Failed to read JSON: {e:?}")))?;
     Ok((json, mod_name))
 }
 
