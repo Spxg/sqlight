@@ -6,15 +6,15 @@ use crate::{
 };
 use once_cell::sync::Lazy;
 use sqlite_wasm_rs::{
-    export::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil},
     mem_vfs::MemVfsUtil,
-    utils::{copy_to_uint8_array, copy_to_vec},
+    sahpool_vfs::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil},
 };
 use sqlitend::SQLiteDb;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc::UnboundedReceiver;
+use wasm_array_cp::ArrayBufferCopy;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
@@ -78,12 +78,10 @@ async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
         .opfs
         .get_or_try_init(|| async {
             sqlite_wasm_rs::sahpool_vfs::install(
-                Some(
-                    &OpfsSAHPoolCfgBuilder::new()
-                        .directory(OPFS_VFS_DIR)
-                        .vfs_name("opfs")
-                        .build(),
-                ),
+                &OpfsSAHPoolCfgBuilder::new()
+                    .directory(OPFS_VFS_DIR)
+                    .vfs_name("opfs")
+                    .build(),
                 false,
             )
             .await
@@ -101,7 +99,7 @@ async fn download_db() -> Result<DownloadDbResponse> {
         let filename = &worker.open_options.filename;
         let db = if worker.open_options.persist {
             get_opfs_util()?
-                .export_file(filename)
+                .export_db(filename)
                 .map_err(|err| WorkerError::DownloadDb(format!("{err}")))?
         } else {
             let mem_vfs = &FS_UTIL.mem;
@@ -111,14 +109,14 @@ async fn download_db() -> Result<DownloadDbResponse> {
         };
         Ok(DownloadDbResponse {
             filename: worker.open_options.filename.clone(),
-            data: copy_to_uint8_array(&db),
+            data: ArrayBufferCopy::from_slice(&db),
         })
     })
     .await
 }
 
 async fn load_db(options: LoadDbOptions) -> Result<()> {
-    let db = copy_to_vec(&options.data);
+    let db = ArrayBufferCopy::to_vec(&options.data);
 
     #[cfg(feature = "sqlite3")]
     let page_size = sqlite_wasm_rs::utils::check_import_db(&db)
@@ -133,7 +131,8 @@ async fn load_db(options: LoadDbOptions) -> Result<()> {
         let filename = &worker.open_options.filename;
         if worker.open_options.persist {
             let opfs = get_opfs_util()?;
-            opfs.unlink(filename).map_err(|_| WorkerError::Unexpected)?;
+            opfs.delete_db(filename)
+                .map_err(|_| WorkerError::Unexpected)?;
 
             if let Err(err) = opfs.import_db_unchecked(filename, &db) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
@@ -180,7 +179,7 @@ async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
             let filename = &worker.open_options.filename;
             if worker.open_options.persist {
                 get_opfs_util()?
-                    .unlink(filename)
+                    .delete_db(filename)
                     .map_err(|_| WorkerError::Unexpected)?;
             } else {
                 let mem_vfs = &FS_UTIL.mem;
