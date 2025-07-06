@@ -1725,9 +1725,9 @@ dependencies = [
 
 [[package]]
 name = "sqlite-wasm-rs"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de7f07bae637a5bd84def164aa94e4078daeec91346781fa3b07699061b0aeea"
+checksum = "56ca2abda7f1ea0bcb15fadeb59e822bf5ffb1f987bfcafb74f5534ee095cf72"
 dependencies = [
  "cc",
  "fragile",
