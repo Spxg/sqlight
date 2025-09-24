@@ -4,6 +4,7 @@ use crate::{
     DownloadDbResponse, LoadDbOptions, OpenOptions, RunOptions, SQLiteRunResult, WorkerError,
     WorkerRequest, WorkerResponse,
 };
+use js_sys::Uint8Array;
 use once_cell::sync::Lazy;
 use sqlite_wasm_rs::{
     mem_vfs::MemVfsUtil,
@@ -14,7 +15,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc::UnboundedReceiver;
-use wasm_array_cp::ArrayBufferCopy;
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
@@ -109,14 +109,14 @@ async fn download_db() -> Result<DownloadDbResponse> {
         };
         Ok(DownloadDbResponse {
             filename: worker.open_options.filename.clone(),
-            data: ArrayBufferCopy::from_slice(&db),
+            data: Uint8Array::new_from_slice(&db),
         })
     })
     .await
 }
 
 async fn load_db(options: LoadDbOptions) -> Result<()> {
-    let db = ArrayBufferCopy::to_vec(&options.data);
+    let db = options.data.to_vec();
 
     #[cfg(feature = "sqlite3")]
     let page_size = sqlite_wasm_rs::utils::check_import_db(&db)
