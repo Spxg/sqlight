@@ -1,4 +1,5 @@
 use sqlite_wasm_rs::*;
+use sqlite_wasm_vec::sqlite3_vec_init;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
 
@@ -29,6 +30,10 @@ unsafe impl Sync for SQLiteDb {}
 
 impl SQLiteDb {
     pub fn open(filename: &str) -> Result<Arc<Self>> {
+        unsafe {
+            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+        }
+
         let mut sqlite3 = std::ptr::null_mut();
         let ret = unsafe {
             sqlite3_open_v2(
