@@ -12,6 +12,12 @@ Users who have used [rust playground](https://play.rust-lang.org) will feel very
 
 Because the layout and component design are derived from it, but rewritten using [leptos](https://leptos.dev).
 
+## Extensions Supported
+
+|Extension|About|
+|-|-|
+|[sqlite-vec](https://crates.io/crates/sqlite-wasm-vec)|A vector search SQLite extension that runs anywhere!|
+
 ## Local deployment
 
 ```sh
@@ -23,3 +29,5 @@ cargo install trunk --locked
 # The product is in the dist folder
 trunk build --release
 ```
+
+
