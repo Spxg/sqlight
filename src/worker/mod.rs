@@ -6,10 +6,9 @@ use crate::{
 };
 use js_sys::Uint8Array;
 use once_cell::sync::Lazy;
-use sqlite_wasm_rs::{
-    mem_vfs::MemVfsUtil,
-    sahpool_vfs::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil},
-};
+use sqlite_wasm_rs::MemVfsUtil;
+use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
+
 use sqlitend::SQLiteDb;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -56,6 +55,9 @@ struct FSUtil {
     opfs: OnceCell<OpfsSAHPoolUtil>,
 }
 
+unsafe impl Send for FSUtil {}
+unsafe impl Sync for FSUtil {}
+
 struct SQLiteWorker {
     open_options: OpenOptions,
     state: SQLiteState,
@@ -77,7 +79,7 @@ async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
     FS_UTIL
         .opfs
         .get_or_try_init(|| async {
-            sqlite_wasm_rs::sahpool_vfs::install(
+            sqlite_wasm_vfs::sahpool::install(
                 &OpfsSAHPoolCfgBuilder::new()
                     .directory(OPFS_VFS_DIR)
                     .vfs_name("opfs")
