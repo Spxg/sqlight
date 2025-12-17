@@ -28,14 +28,7 @@ jobs:
       - run: cargo binstall trunk
 
       - name: Build
-        run: |
-          git clone https://github.com/emscripten-core/emsdk.git
-          cd emsdk
-          ./emsdk install latest
-          ./emsdk activate latest
-          source ./emsdk_env.sh
-          cd ..
-          trunk build --release
+        run: trunk build --release
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4
