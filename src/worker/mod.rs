@@ -7,6 +7,7 @@ use crate::{
 use js_sys::Uint8Array;
 use once_cell::sync::Lazy;
 use sqlite_wasm_rs::MemVfsUtil;
+use sqlite_wasm_rs::WasmOsCallback;
 use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
 
 use sqlitend::SQLiteDb;
@@ -51,7 +52,7 @@ fn uri(filename: &str, persist: bool) -> String {
 }
 
 struct FSUtil {
-    mem: MemVfsUtil,
+    mem: MemVfsUtil<WasmOsCallback>,
     opfs: OnceCell<OpfsSAHPoolUtil>,
 }
 
@@ -79,7 +80,7 @@ async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
     FS_UTIL
         .opfs
         .get_or_try_init(|| async {
-            sqlite_wasm_vfs::sahpool::install(
+            sqlite_wasm_vfs::sahpool::install::<WasmOsCallback>(
                 &OpfsSAHPoolCfgBuilder::new()
                     .directory(OPFS_VFS_DIR)
                     .vfs_name("opfs")
