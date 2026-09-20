@@ -40,8 +40,8 @@ prettytable-rs = "0.10.0"
 sqlformat = "0.3.5"
 
 sqlite-wasm-vec = "0.1.3"
-sqlite-wasm-vfs = "0.2.0"
-sqlite-wasm-rs = { version = "0.5.3", default-features = false }
+sqlite-wasm-vfs = { version = "0.3.0", features = ["sahpool"] }
+sqlite-wasm-rs = { version = "0.6.1", default-features = false, features = ["wasm-bindgen"] }
 
 [features]
 default = ["sqlite3"]

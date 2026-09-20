@@ -6,8 +6,8 @@ use crate::{
 };
 use js_sys::Uint8Array;
 use once_cell::sync::Lazy;
-use sqlite_wasm_rs::MemVfsUtil;
 use sqlite_wasm_rs::WasmOsCallback;
+use sqlite_wasm_rs::vfs::{VfsFilesManager, memvfs::MemVfsUtil, transfer::DbTransfer};
 use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
 
 use sqlitend::SQLiteDb;
@@ -24,7 +24,8 @@ type Result<T> = std::result::Result<T, WorkerError>;
 static DB: Lazy<Mutex<Option<SQLiteWorker>>> = Lazy::new(|| Mutex::new(None));
 
 static FS_UTIL: Lazy<FSUtil> = Lazy::new(|| FSUtil {
-    mem: MemVfsUtil::new(),
+    // All SQLite access is serialized on this dedicated worker.
+    mem: unsafe { MemVfsUtil::get().expect("Failed to initialize memory VFS") },
     opfs: OnceCell::new(),
 });
 
@@ -52,7 +53,7 @@ fn uri(filename: &str, persist: bool) -> String {
 }
 
 struct FSUtil {
-    mem: MemVfsUtil<WasmOsCallback>,
+    mem: MemVfsUtil,
     opfs: OnceCell<OpfsSAHPoolUtil>,
 }
 
@@ -99,20 +100,34 @@ fn get_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
 
 async fn download_db() -> Result<DownloadDbResponse> {
     with_worker(|worker| {
+        if let SQLiteState::Opened(db) = &worker.state {
+            if !db.is_autocommit() {
+                return Err(WorkerError::DownloadDb(
+                    "Commit or roll back the current transaction before downloading".into(),
+                ));
+            }
+        }
+        // VFS transfers require a closed database. Reopen even if export fails.
+        let was_open = matches!(worker.state, SQLiteState::Opened(_));
+        drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
         let filename = &worker.open_options.filename;
         let db = if worker.open_options.persist {
             get_opfs_util()?
                 .export_db(filename)
-                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))?
+                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))
         } else {
             let mem_vfs = &FS_UTIL.mem;
             mem_vfs
                 .export_db(filename)
-                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))?
+                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))
         };
+        if was_open {
+            worker.state =
+                SQLiteState::Opened(SQLiteDb::open(&uri(filename, worker.open_options.persist))?);
+        }
         Ok(DownloadDbResponse {
             filename: worker.open_options.filename.clone(),
-            data: Uint8Array::new_from_slice(&db),
+            data: Uint8Array::new_from_slice(&db?),
         })
     })
     .await
@@ -122,11 +137,7 @@ async fn load_db(options: LoadDbOptions) -> Result<()> {
     let db = options.data.to_vec();
 
     #[cfg(feature = "sqlite3")]
-    let page_size = sqlite_wasm_rs::utils::check_import_db(&db)
-        .map_err(|err| WorkerError::LoadDb(format!("{err}")))?;
-
-    #[cfg(feature = "sqlite3mc")]
-    let page_size = 65536;
+    validate_import_db(&db).map_err(|err| WorkerError::LoadDb(format!("{err}")))?;
 
     with_worker(|worker| {
         drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
@@ -134,16 +145,15 @@ async fn load_db(options: LoadDbOptions) -> Result<()> {
         let filename = &worker.open_options.filename;
         if worker.open_options.persist {
             let opfs = get_opfs_util()?;
-            opfs.delete_db(filename)
-                .map_err(|_| WorkerError::Unexpected)?;
+            opfs.remove(filename).map_err(|_| WorkerError::Unexpected)?;
 
-            if let Err(err) = opfs.import_db_unchecked(filename, &db) {
+            if let Err(err) = import_db(opfs, filename, &db) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
             }
         } else {
             let mem_vfs = &FS_UTIL.mem;
-            mem_vfs.delete_db(filename);
-            if let Err(err) = mem_vfs.import_db_unchecked(filename, &db, page_size) {
+            mem_vfs.remove(filename).unwrap();
+            if let Err(err) = import_db(mem_vfs, filename, &db) {
                 return Err(WorkerError::LoadDb(format!("{err}")));
             }
         }
@@ -155,6 +165,51 @@ async fn load_db(options: LoadDbOptions) -> Result<()> {
         Ok(())
     })
     .await
+}
+
+fn import_db<T: DbTransfer>(
+    vfs: &T,
+    filename: &str,
+    db: &[u8],
+) -> std::result::Result<(), T::Error> {
+    #[cfg(feature = "sqlite3")]
+    {
+        vfs.import_db(filename, db)
+    }
+
+    #[cfg(feature = "sqlite3mc")]
+    {
+        vfs.import_db_unchecked(filename, db)
+    }
+}
+
+#[cfg(feature = "sqlite3")]
+fn validate_import_db(
+    db: &[u8],
+) -> std::result::Result<(), sqlite_wasm_rs::vfs::transfer::ImportDbError> {
+    use sqlite_wasm_rs::vfs::transfer::ImportDbError;
+
+    // Validate before removing the current database. The checked transfer also
+    // validates, but only after we have freed the destination filename.
+    if db.len() < 512 || db.len() % 512 != 0 {
+        return Err(ImportDbError::InvalidDbSize);
+    }
+    if !db.starts_with(b"SQLite format 3\0") {
+        return Err(ImportDbError::InvalidHeader);
+    }
+    let page_size = u16::from_be_bytes([db[16], db[17]]);
+    let page_size = if page_size == 1 {
+        65536
+    } else {
+        usize::from(page_size)
+    };
+    if !(512..=65536).contains(&page_size) || !page_size.is_power_of_two() {
+        return Err(ImportDbError::InvalidPageSize);
+    }
+    if db.len() % page_size != 0 {
+        return Err(ImportDbError::InvalidDbSize);
+    }
+    Ok(())
 }
 
 async fn open(options: OpenOptions) -> Result<()> {
@@ -182,11 +237,11 @@ async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
             let filename = &worker.open_options.filename;
             if worker.open_options.persist {
                 get_opfs_util()?
-                    .delete_db(filename)
+                    .remove(filename)
                     .map_err(|_| WorkerError::Unexpected)?;
             } else {
                 let mem_vfs = &FS_UTIL.mem;
-                mem_vfs.delete_db(filename);
+                mem_vfs.remove(filename).unwrap();
             }
 
             worker.state = SQLiteState::Opened(SQLiteDb::open(&uri(

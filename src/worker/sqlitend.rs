@@ -29,6 +29,10 @@ unsafe impl Send for SQLiteDb {}
 unsafe impl Sync for SQLiteDb {}
 
 impl SQLiteDb {
+    pub fn is_autocommit(&self) -> bool {
+        unsafe { sqlite3_get_autocommit(self.sqlite3) != 0 }
+    }
+
     pub fn open(filename: &str) -> Result<Arc<Self>> {
         unsafe {
             sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
