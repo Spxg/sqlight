@@ -37,8 +37,12 @@ jobs:
       - name: Test configuration and persistence contracts
         run: cargo test --lib --no-default-features
 
-      - name: Check Rust code
-        run: cargo clippy --target wasm32-unknown-unknown --workspace --all-targets --all-features -- -D warnings
+      - name: Check Rust code for each database engine
+        run: |
+          for engine in sqlite3 sqlite3mc sqlcipher; do
+            cargo clippy --target wasm32-unknown-unknown \
+              --workspace --all-targets --no-default-features --features "$engine" -- -D warnings
+          done
 
       - uses: cargo-bins/cargo-binstall@v1.26.2
       - run: cargo binstall --no-confirm --version 0.22.1 trunk

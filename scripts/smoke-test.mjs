@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { checkEditor } from './editor-checks.mjs';
+import { checkEngineSelection, checkWorkers } from './engine-checks.mjs';
 
 const dist = fileURLToPath(new URL('../dist/', import.meta.url));
 const types = {
@@ -247,118 +248,15 @@ try {
 
   await checkEditor(page);
 
-  // Both standalone workers support SQL, extensions, transfers, and persistent storage.
-  const workers = await page.evaluate(async () => {
-    const checked = [];
-    for (const engine of ['sqlite3', 'sqlite3mc']) {
-      const worker = new Worker(`./${engine}_loader.js`, { type: 'module' });
-      const pending = [];
-      worker.onmessage = (event) => pending.shift()(event.data);
-      const receive = () => new Promise((resolve) => pending.push(resolve));
-      const ready = await receive();
-      if (ready !== 'Ready')
-        throw new Error(`Unexpected worker ready: ${JSON.stringify(ready)}`);
-      const request = async (value) => {
-        const response = receive();
-        worker.postMessage(value);
-        return response;
-      };
-      const unwrap = (response) => {
-        const result = Object.values(response)[0];
-        if (!Object.hasOwn(result, 'Ok'))
-          throw new Error(JSON.stringify(response));
-        return result.Ok;
-      };
-      const sql = async (value) =>
-        unwrap(
-          await request({
-            Run: { sql: value, embed: false, clear_on_prepare: false },
-          }),
-        );
-      try {
-        unwrap(
-          await request({ Open: { filename: 'smoke.db', persist: false } }),
-        );
-        const result = await sql(
-          "; -- comment\n SELECT '你好' AS unicode, vec_version() AS vec; ; SELECT 2 AS second;",
-        );
-        if (result.result.filter((item) => item.Step).length !== 2)
-          throw new Error('SQL statements were skipped');
-        if (result.result[0].Step.values.rows[0][0] !== "'你好'")
-          throw new Error('Unicode result changed');
-        await sql(
-          'CREATE TABLE persistent(value); INSERT INTO persistent VALUES (7); BEGIN; INSERT INTO persistent VALUES (8);',
-        );
-        const transaction = await request('DownloadDb');
-        if (!transaction.DownloadDb.Err)
-          throw new Error('Export accepted an uncommitted transaction');
-        await sql('ROLLBACK;');
-        const exported = unwrap(await request('DownloadDb'));
-        unwrap(await request({ LoadDb: { data: exported.data } }));
-        const imported = await sql('SELECT * FROM persistent;');
-        if (imported.result[0].Step.values.rows[0][0] !== '7')
-          throw new Error('Database transfer changed rows');
-        if (engine === 'sqlite3mc') {
-          unwrap(
-            await request({
-              Open: { filename: 'encrypted.db', persist: false },
-            }),
-          );
-          await sql(
-            "PRAGMA key='smoke-key'; CREATE TABLE secret(value); INSERT INTO secret VALUES (456);",
-          );
-          const encrypted = unwrap(await request('DownloadDb'));
-          if (
-            new TextDecoder().decode(encrypted.data.slice(0, 16)) ===
-            'SQLite format 3\0'
-          ) {
-            throw new Error('The encrypted database has a plaintext header');
-          }
-          unwrap(await request({ LoadDb: { data: encrypted.data } }));
-          const decrypted = await sql(
-            "PRAGMA key='smoke-key'; SELECT * FROM secret;",
-          );
-          const table = decrypted.result.find(
-            (item) => item.Step?.values?.columns[0] === 'value',
-          );
-          if (table.Step.values.rows[0][0] !== '456') {
-            throw new Error('Encrypted database transfer changed rows');
-          }
-        }
-        unwrap(
-          await request({
-            Open: { filename: `smoke-${engine}.db`, persist: true },
-          }),
-        );
-        await sql(
-          'CREATE TABLE IF NOT EXISTS persisted(value); DELETE FROM persisted; INSERT INTO persisted VALUES (123);',
-        );
-        unwrap(
-          await request({ Open: { filename: 'memory.db', persist: false } }),
-        );
-        unwrap(
-          await request({
-            Open: { filename: `smoke-${engine}.db`, persist: true },
-          }),
-        );
-        const persistent = await sql('SELECT * FROM persisted;');
-        if (persistent.result[0].Step.values.rows[0][0] !== '123')
-          throw new Error('OPFS did not persist data');
-        checked.push(engine);
-      } finally {
-        worker.terminate();
-      }
-    }
-    return checked;
-  });
-  assert.deepEqual(workers, ['sqlite3', 'sqlite3mc']);
+  await checkEngineSelection(page);
+  await checkWorkers(page);
   assert.deepEqual(
     errors,
     [],
     'The app should load and run without browser errors',
   );
   console.log(
-    'Browser checks passed: editor, execution, preferences, sharing, transfers, both workers, and OPFS.',
+    'Browser checks passed: editor, execution, preferences, sharing, transfers, all three engines, encryption, and OPFS.',
   );
 } catch (error) {
   await mkdir('test-results', { recursive: true });

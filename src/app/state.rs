@@ -4,7 +4,7 @@ use aceditor::Editor;
 use js_sys::Uint8Array;
 use leptos::tachys::dom::window;
 use reactive_stores::Store;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{SQLightError, SQLiteStatementResult, SendWrapper};
 
@@ -34,7 +34,8 @@ pub struct GlobalState {
     keep_ctx: bool,
     sql: String,
     run_selected_sql: bool,
-    multiple_ciphers: bool,
+    #[serde(alias = "multiple_ciphers", deserialize_with = "deserialize_engine")]
+    engine: Engine,
     // runtime state below
     #[serde(skip)]
     editor: Option<SendWrapper<Editor>>,
@@ -70,7 +71,7 @@ impl Default for GlobalState {
             keep_ctx: false,
             sql: DEFAULT_CODE.into(),
             run_selected_sql: false,
-            multiple_ciphers: false,
+            engine: Engine::SQLite,
             editor: None,
             focus: None,
             is_running: false,
@@ -132,6 +133,51 @@ impl Default for EditorConfig {
             dark_theme: "github_dark".into(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Engine {
+    #[default]
+    SQLite,
+    MultipleCiphers,
+    SQLCipher,
+}
+
+impl Engine {
+    pub fn value(self) -> &'static str {
+        match self {
+            Self::SQLite => "SQLite",
+            Self::MultipleCiphers => "SQLite3 Multiple Ciphers",
+            Self::SQLCipher => "SQLCipher",
+        }
+    }
+
+    pub fn from_select(value: &str) -> Self {
+        match value {
+            "SQLite" => Self::SQLite,
+            "SQLite3 Multiple Ciphers" => Self::MultipleCiphers,
+            "SQLCipher" => Self::SQLCipher,
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn deserialize_engine<'de, D>(deserializer: D) -> Result<Engine, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredEngine {
+        Engine(Engine),
+        MultipleCiphers(bool),
+    }
+
+    Ok(match StoredEngine::deserialize(deserializer)? {
+        StoredEngine::Engine(engine) => engine,
+        StoredEngine::MultipleCiphers(true) => Engine::MultipleCiphers,
+        StoredEngine::MultipleCiphers(false) => Engine::SQLite,
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,7 +274,7 @@ impl Orientation {
 
 #[cfg(test)]
 mod tests {
-    use super::{GlobalState, Orientation, Theme};
+    use super::{Engine, GlobalState, Orientation, Theme};
 
     #[test]
     fn missing_preferences_use_defaults() {
@@ -237,8 +283,37 @@ mod tests {
 
         assert_eq!(state.editor_config.keyboard, "vim");
         assert_eq!(state.editor_config.light_theme, "github");
+        assert_eq!(state.engine, Engine::SQLite);
         assert!(matches!(state.theme, Theme::System));
         assert!(!state.sql.is_empty());
+    }
+
+    #[test]
+    fn previous_cipher_toggle_migrates_to_engine() {
+        for (enabled, engine) in [(false, Engine::SQLite), (true, Engine::MultipleCiphers)] {
+            let config = serde_json::json!({ "multiple_ciphers": enabled });
+            let state: GlobalState = serde_json::from_value(config).unwrap();
+
+            assert_eq!(state.engine, engine);
+
+            let saved = serde_json::to_value(state).unwrap();
+            assert_eq!(saved["engine"], serde_json::to_value(engine).unwrap());
+            assert!(saved.get("multiple_ciphers").is_none());
+        }
+    }
+
+    #[test]
+    fn every_engine_survives_configuration_round_trip() {
+        for engine in [Engine::SQLite, Engine::MultipleCiphers, Engine::SQLCipher] {
+            let state = GlobalState {
+                engine,
+                ..GlobalState::default()
+            };
+            let saved = serde_json::to_string(&state).unwrap();
+            let restored: GlobalState = serde_json::from_str(&saved).unwrap();
+
+            assert_eq!(restored.engine, engine);
+        }
     }
 
     #[test]

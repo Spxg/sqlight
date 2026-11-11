@@ -166,7 +166,7 @@ fn handle_save_state(state: Store<GlobalState>) {
         state.keep_ctx().track();
         state.sql().track();
         state.run_selected_sql().track();
-        state.multiple_ciphers().track();
+        state.engine().track();
 
         let timeout = set_timeout_with_handle(
             move || state.read_untracked().save(),

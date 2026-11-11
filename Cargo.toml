@@ -81,6 +81,7 @@ features = [
 default = ["sqlite3"]
 sqlite3 = ["dep:sqlite-wasm-rs", "dep:sqlite-wasm-vec", "dep:sqlite-wasm-vfs"]
 sqlite3mc = ["sqlite3", "sqlite-wasm-rs/sqlite3mc"]
+sqlcipher = ["sqlite3", "sqlite-wasm-rs/sqlcipher"]
 
 [[bin]]
 name = "app"
@@ -95,6 +96,11 @@ required-features = ["sqlite3"]
 name = "sqlite3mc"
 path = "src/bin/sqlite3mc.rs"
 required-features = ["sqlite3mc"]
+
+[[bin]]
+name = "sqlcipher"
+path = "src/bin/sqlcipher.rs"
+required-features = ["sqlcipher"]
 
 [profile.release]
 lto = true

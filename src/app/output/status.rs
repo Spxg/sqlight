@@ -15,6 +15,13 @@ fn error_details(error: &SQLightError) -> &'static str {
                 SQLitendError::GetColumnName(_) | SQLitendError::UnsupportedColumnType(_) => {
                     "Please report this error on GitHub."
                 }
+                SQLitendError::OpenDb(error)
+                | SQLitendError::Prepare(error)
+                | SQLitendError::Step(error)
+                    if error.code == 26 =>
+                {
+                    "Check the SQLite engine, encryption key, and cipher settings."
+                }
                 SQLitendError::OpenDb(_) | SQLitendError::Step(_) => {
                     "If the database is malformed, choose Drop Context and run the query again."
                 }

@@ -10,7 +10,7 @@ use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 use crate::{
     OpenOptions, SQLightError, SQLiteRunResult, SendWrapper, WorkerError, WorkerRequest,
     WorkerResponse,
-    app::{Exported, GlobalState, GlobalStateStoreFields, Vfs},
+    app::{Engine, Exported, GlobalState, GlobalStateStoreFields, Vfs},
 };
 
 type Result<T> = std::result::Result<T, WorkerError>;
@@ -19,6 +19,7 @@ type Session = Rc<Mutex<Option<WorkerSession>>>;
 thread_local! {
     static SQLITE: Session = Session::default();
     static SQLITE_MC: Session = Session::default();
+    static SQLCIPHER: Session = Session::default();
 }
 
 struct WorkerSession {
@@ -118,12 +119,11 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
     }
     state.last_error().set(None);
 
-    let multiple_ciphers = state.multiple_ciphers().get_untracked();
     let persist = state.vfs().get_untracked() == Vfs::OPFS;
-    let (session, uri) = if multiple_ciphers {
-        (SQLITE_MC.with(Clone::clone), "./sqlite3mc_loader.js")
-    } else {
-        (SQLITE.with(Clone::clone), "./sqlite3_loader.js")
+    let (session, uri) = match state.engine().get_untracked() {
+        Engine::SQLite => (SQLITE.with(Clone::clone), "./sqlite3_loader.js"),
+        Engine::MultipleCiphers => (SQLITE_MC.with(Clone::clone), "./sqlite3mc_loader.js"),
+        Engine::SQLCipher => (SQLCIPHER.with(Clone::clone), "./sqlcipher_loader.js"),
     };
     let importing = matches!(request, WorkerRequest::LoadDb(_));
 

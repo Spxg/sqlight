@@ -13,6 +13,33 @@ keybindings, database import and export, and SQLite extensions.
 | --- | --- |
 | [sqlite-vec](https://crates.io/crates/sqlite-wasm-vec) | Vector search for SQLite. |
 
+## Database engines and encryption
+
+Choose SQLite, SQLite3 Multiple Ciphers, or SQLCipher under **Advanced options →
+SQLite Engine**. Each engine uses a separate OPFS storage directory, so switching
+engines keeps their databases separate.
+
+To create or open an encrypted SQLCipher database, select SQLCipher and run the
+key statement before any database reads or writes:
+
+```sql
+PRAGMA key = 'example';
+CREATE TABLE notes (text TEXT);
+INSERT INTO notes VALUES ('Hello from SQLCipher');
+SELECT * FROM notes;
+```
+
+Enable **Keep Context** to keep the keyed connection across executions. After
+importing an encrypted database, run `PRAGMA key = 'example';` with its passphrase
+before querying it. Import and export reopen the connection, so run the key
+statement again afterward. Keys are not restored automatically; SQL entered in
+the editor follows the normal editor saving and sharing behavior.
+
+Setting a key does not encrypt an existing plaintext database. Use
+[`sqlcipher_export()`](https://www.zetetic.net/sqlcipher/sqlcipher-api/#sqlcipher_export)
+to convert one. See the [SQLCipher API](https://www.zetetic.net/sqlcipher/sqlcipher-api/)
+for encryption settings and compatibility options.
+
 ## Development
 
 Install [Rust](https://rustup.rs), [Node.js 26 LTS](https://nodejs.org), and
@@ -40,9 +67,14 @@ For direct Rust checks, generate the assets first:
 npm run assets
 cargo fmt --all -- --check
 cargo test --lib --no-default-features
-cargo clippy --target wasm32-unknown-unknown \
-  --workspace --all-targets --all-features -- -D warnings
+for engine in sqlite3 sqlite3mc sqlcipher; do
+  cargo clippy --target wasm32-unknown-unknown \
+    --workspace --all-targets --no-default-features --features "$engine" -- -D warnings
+done
 ```
+
+SQLCipher and SQLite3 Multiple Ciphers are mutually exclusive Cargo features, so
+check each engine separately instead of using `--all-features`.
 
 ## Production build
 
@@ -52,8 +84,8 @@ npm run build
 ```
 
 Serve the generated `dist` directory with a static web server. The app requires
-HTTPS or localhost for browser storage features. Both SQLite worker binaries are
-built automatically, including the SQLite3 Multiple Ciphers variant.
+HTTPS or localhost for browser storage features. All three worker binaries are
+built automatically: SQLite, SQLite3 Multiple Ciphers, and SQLCipher.
 
 The manually triggered Pages workflow runs the same build and publishes `dist`
 to GitHub Pages.
@@ -71,7 +103,7 @@ npm run test:browser
 
 The script serves `dist` on localhost and checks editing, formatting, keyboard
 execution, SQL results and error recovery, saved preferences, sharing, and database
-import and export. It also checks both worker engines, sqlite-vec, and OPFS
+import and export. It also checks all three engines, sqlite-vec, and OPFS
 persistence while blocking external network requests.
 
 The Checks workflow runs formatting, unit tests, Clippy, the production build, and

@@ -24,10 +24,13 @@ const OPFS_VFS: &str = "opfs";
 #[cfg(feature = "sqlite3mc")]
 const OPFS_VFS: &str = "multipleciphers-opfs";
 
-#[cfg(not(feature = "sqlite3mc"))]
-const OPFS_VFS_DIR: &str = "sqlight-sahpool";
-#[cfg(feature = "sqlite3mc")]
-const OPFS_VFS_DIR: &str = "sqlight-sahpool-mc";
+const OPFS_VFS_DIR: &str = if cfg!(feature = "sqlite3mc") {
+    "sqlight-sahpool-mc"
+} else if cfg!(feature = "sqlcipher") {
+    "sqlight-sahpool-sqlcipher"
+} else {
+    "sqlight-sahpool"
+};
 
 #[cfg(not(feature = "sqlite3mc"))]
 const MEM_VFS: &str = "memvfs";
@@ -114,7 +117,7 @@ impl SQLiteWorker {
 
     fn load_db(&mut self, data: LoadDbOptions) -> Result<()> {
         let data = data.data.to_vec();
-        #[cfg(not(feature = "sqlite3mc"))]
+        #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
         validate_import_db(&data).map_err(|err| WorkerError::LoadDb(err.to_string()))?;
 
         self.db = None;
@@ -168,24 +171,24 @@ fn import_db<T: DbTransfer>(
     filename: &str,
     db: &[u8],
 ) -> std::result::Result<(), T::Error> {
-    #[cfg(not(feature = "sqlite3mc"))]
+    #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
     {
         vfs.import_db(filename, db)
     }
-    #[cfg(feature = "sqlite3mc")]
+    #[cfg(any(feature = "sqlite3mc", feature = "sqlcipher"))]
     {
         vfs.import_db_unchecked(filename, db)
     }
 }
 
-#[cfg(not(feature = "sqlite3mc"))]
+#[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
 fn validate_import_db(
     db: &[u8],
 ) -> std::result::Result<(), sqlite_wasm_rs::vfs::transfer::ImportDbError> {
     use sqlite_wasm_rs::vfs::transfer::ImportDbError;
 
     // Validate before replacing the current database.
-    if db.len() < 512 || db.len() % 512 != 0 {
+    if db.len() < 512 || !db.len().is_multiple_of(512) {
         return Err(ImportDbError::InvalidDbSize);
     }
     if !db.starts_with(b"SQLite format 3\0") {
@@ -200,7 +203,7 @@ fn validate_import_db(
     if !(512..=65536).contains(&page_size) || !page_size.is_power_of_two() {
         return Err(ImportDbError::InvalidPageSize);
     }
-    if db.len() % page_size != 0 {
+    if !db.len().is_multiple_of(page_size) {
         return Err(ImportDbError::InvalidDbSize);
     }
     Ok(())

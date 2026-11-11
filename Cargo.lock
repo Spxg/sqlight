@@ -1517,6 +1517,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlcipher-src"
+version = "420.0.0+sqlcipher-4.20.0-sqlite-3.54.1-libtomcrypt-1.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd6b5280ed2593d07b2816ec531821c15c306903bcca224716f1fbcc2bbfedfe"
+
+[[package]]
 name = "sqlformat"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1566,6 +1572,7 @@ dependencies = [
  "cc",
  "js-sys",
  "rsqlite-vfs",
+ "sqlcipher-src",
  "sqlite3mc-src",
  "wasm-bindgen",
 ]
