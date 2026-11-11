@@ -227,10 +227,9 @@ export async function checkWorkspaces(page) {
   try {
     await workspacePage.goto(origin.href);
     await workspacePage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
-    await setFreshDatabase(false);
+    await setFreshDatabase(true);
     const initialDatabase = (await config()).database;
     assert.equal(initialDatabase, 'default.db');
-    await setFreshDatabase(true);
     await run('CREATE TABLE fresh_run_probe(value INTEGER);');
     await run("SELECT count(*) FROM sqlite_schema WHERE name = 'fresh_run_probe';");
     await expectValue('0');

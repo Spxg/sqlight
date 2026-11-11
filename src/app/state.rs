@@ -73,7 +73,7 @@ impl Default for GlobalState {
             editor_config: EditorConfig::default(),
             orientation: Orientation::Automatic,
             theme: Theme::System,
-            keep_ctx: false,
+            keep_ctx: true,
             sql: DEFAULT_SQL.into(),
             run_selected_sql: false,
             engine: Engine::SQLite,
