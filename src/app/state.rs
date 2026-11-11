@@ -21,8 +21,6 @@ pub struct GlobalState {
     deleted_workspace_ids: Vec<String>,
     #[serde(default)]
     database: String,
-    #[serde(default)]
-    pending_database: bool,
     editor_config: EditorConfig,
     orientation: Orientation,
     theme: Theme,
@@ -69,7 +67,6 @@ impl Default for GlobalState {
             workspaces: vec![],
             deleted_workspace_ids: vec![],
             database: "default.db".into(),
-            pending_database: false,
             editor_config: EditorConfig::default(),
             orientation: Orientation::Automatic,
             theme: Theme::System,
@@ -100,7 +97,6 @@ impl GlobalState {
         std::mem::swap(&mut self.workspace_id, &mut workspace.id);
         std::mem::swap(&mut self.workspace_name, &mut workspace.name);
         std::mem::swap(&mut self.database, &mut workspace.database);
-        std::mem::swap(&mut self.pending_database, &mut workspace.pending_database);
         std::mem::swap(&mut self.sql, &mut workspace.sql);
         std::mem::swap(&mut self.engine, &mut workspace.engine);
         std::mem::swap(&mut self.keep_ctx, &mut workspace.keep_ctx);
@@ -126,7 +122,6 @@ impl GlobalState {
     pub fn create_workspace(&mut self, id: String, name: String) {
         let mut workspace = Workspace {
             database: self.database.clone(),
-            pending_database: self.pending_database,
             id,
             name,
             sql: NEW_WORKSPACE_SQL.into(),
@@ -151,7 +146,6 @@ impl GlobalState {
             id: saved.workspace_id,
             name: saved.workspace_name,
             database: saved.database,
-            pending_database: saved.pending_database,
             sql: saved.sql,
             engine: saved.engine,
             keep_ctx: saved.keep_ctx,
@@ -197,7 +191,6 @@ impl GlobalState {
             id: self.workspace_id.clone(),
             name: self.workspace_name.clone(),
             database: self.database.clone(),
-            pending_database: self.pending_database,
             sql: self.sql.clone(),
             engine: self.engine,
             keep_ctx: self.keep_ctx,
@@ -298,8 +291,6 @@ pub struct Workspace {
     pub name: String,
     #[serde(default)]
     pub database: String,
-    #[serde(default)]
-    pub pending_database: bool,
     pub sql: String,
     pub engine: Engine,
     pub keep_ctx: bool,

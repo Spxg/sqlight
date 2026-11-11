@@ -114,21 +114,40 @@ export async function checkFiles(page) {
     );
   }
 
-  async function expectMissing(filename, embed = false) {
-    const sql = (await config()).sql;
+  async function expectCreatedOnRun(filename, embed = false) {
+    const sql = 'SELECT count(*) AS recreated_tables FROM sqlite_schema;';
+    await edit(sql);
+    const before = await config();
+    const menu = await workspaceMenu();
+    const selected = menu.getByRole('combobox', { name: 'Main database', exact: true });
+    assert.equal(await selected.inputValue(), filename);
+    assert.equal(await selected.locator('option:checked').textContent(), `${filename} (Created on run)`);
+    await closeWorkspace();
     if (embed) {
       await filesPage.getByRole('button', { name: 'Tools', exact: true }).click();
       await filesPage.getByRole('button', { name: /^Embed Query Result/ }).click();
+      await filesPage.waitForFunction((sql) => {
+        const value = ace.edit('ace_editor').getValue();
+        return value.startsWith('-- R:') && value.endsWith(sql);
+      }, sql);
+      assert.match(await filesPage.evaluate(() => ace.edit('ace_editor').getValue()),
+        /-- R: \|\s*0\s*\|/);
+      await filesPage.waitForFunction(() =>
+        JSON.parse(localStorage.getItem('config'))?.sql === ace.edit('ace_editor').getValue(),
+      );
     } else {
       await filesPage.getByRole('button', { name: 'Run', exact: true }).click();
+      await filesPage.getByText('Finished', { exact: true }).waitFor();
+      await filesPage.getByRole('cell', { name: '0', exact: true }).waitFor();
+      assert.equal(await filesPage.evaluate(() => ace.edit('ace_editor').getValue()), sql);
     }
-    await filesPage.getByRole('tab', { name: 'Status', selected: true }).waitFor();
-    await filesPage.getByText(`Database file does not exist: ${filename}`, { exact: true })
-      .waitFor();
-    assert.equal(await filesPage.evaluate(() => ace.edit('ace_editor').getValue()), sql);
     const drawer = await openFiles(filesPage);
-    assert.equal(await databaseGroup(drawer, filename).count(), 0);
+    assert.equal(await databaseGroup(drawer, filename).count(), 1);
     await closeFiles(filesPage);
+    const after = await config();
+    for (const field of ['workspace_id', 'database', 'engine', 'read_only', 'keep_ctx']) {
+      assert.equal(after[field], before[field], `Automatic creation preserves ${field}`);
+    }
   }
 
   try {
@@ -137,7 +156,7 @@ export async function checkFiles(page) {
     await edit('SELECT 1191 AS files_draft;');
     const original = await config();
     let drawer = await openFiles(filesPage);
-    await drawer.getByText('No files in this engine yet. Create a database or upload files.', {
+    await drawer.getByText('No database files yet. Create a database or upload files.', {
       exact: true,
     }).waitFor();
     assert.equal(await drawer.getByRole('region', { name: /^Database / }).count(), 0);
@@ -145,7 +164,7 @@ export async function checkFiles(page) {
     assert.deepEqual(await config(), original);
     await createFile('spare.db');
     const empty = await downloadDatabase(filesPage, 'spare.db');
-    assert.equal(empty.data.subarray(0, 16).toString(), 'SQLite format 3\0');
+    assert.equal(empty.data.length, 0);
     drawer = await openFiles(filesPage);
     assert.equal(await databaseGroup(drawer, 'default.db').count(), 0);
     await closeFiles(filesPage);
@@ -154,6 +173,8 @@ export async function checkFiles(page) {
     await menu.getByRole('checkbox', { name: 'Fresh database per run', exact: true }).uncheck();
     await closeWorkspace();
     await run('CREATE TABLE active(value INTEGER); INSERT INTO active VALUES (1);');
+    const validDatabase = (await downloadDatabase(filesPage, 'default.db')).data;
+    assert.equal(validDatabase.subarray(0, 16).toString(), 'SQLite format 3\0');
 
     // Selecting a workspace's main file does not open another connection.
     menu = await workspaceMenu();
@@ -163,6 +184,9 @@ export async function checkFiles(page) {
     await menu.getByRole('textbox', { name: 'Workspace name', exact: true })
       .fill('Second file view');
     await menu.getByRole('button', { name: /^Rename workspace/ }).click();
+    await closeWorkspace();
+    menu = await workspaceMenu();
+    await menu.getByRole('combobox', { name: 'SQLite Engine', exact: true }).selectOption('SQLCipher');
     await closeWorkspace();
     await useFile('spare.db');
     drawer = await openFiles(filesPage);
@@ -200,11 +224,12 @@ export async function checkFiles(page) {
     await disconnect();
     await deleteFile('spare.db');
     await deleteFile('default.db');
-    await expectMissing('default.db');
-    await expectMissing('default.db', true);
-    await filesPage.reload();
-    await filesPage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
-    await expectMissing('default.db');
+    await expectCreatedOnRun('default.db');
+    await disconnect();
+    await deleteFile('default.db');
+    await expectCreatedOnRun('default.db', true);
+    await disconnect();
+    await deleteFile('default.db');
 
     // A missing default must not hide or discard another connection's transaction.
     await createFile('connection-guard.db');
@@ -217,6 +242,7 @@ export async function checkFiles(page) {
       BEGIN; INSERT INTO connection_guard VALUES (2);`);
     menu = await workspaceMenu();
     await menu.getByRole('combobox', { name: 'Workspace', exact: true }).selectOption('default');
+    await menu.getByRole('combobox', { name: 'SQLite Engine', exact: true }).selectOption('SQLCipher');
     await closeWorkspace();
     await edit('SELECT 1195 AS blocked_switch;');
     await filesPage.getByRole('button', { name: 'Run', exact: true }).click();
@@ -224,6 +250,7 @@ export async function checkFiles(page) {
     await filesPage.getByRole('tabpanel').getByText(/Run COMMIT or ROLLBACK/).waitFor();
     const restored = await config();
     assert.equal(restored.database, 'connection-guard.db');
+    assert.equal(restored.engine, 'SQLite');
     assert.equal(restored.keep_ctx, true);
     await run('ROLLBACK; SELECT count(*) AS kept_rows FROM connection_guard;');
     await filesPage.getByRole('cell', { name: '1', exact: true }).waitFor();
@@ -232,7 +259,7 @@ export async function checkFiles(page) {
 
     // Corrupt databases and hot journals can be managed without opening SQLite.
     const logs = await readFile(new URL('./fixtures/logged-databases.zip', import.meta.url));
-    const corrupt = Buffer.from(empty.data);
+    const corrupt = Buffer.from(validDatabase);
     corrupt[100] = 0xff; // Keep the SQLite header valid, but corrupt page one's B-tree.
     await upload([['logs.zip', logs], ['corrupt.db', corrupt]]);
     drawer = await openFiles(filesPage);

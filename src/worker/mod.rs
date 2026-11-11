@@ -1,4 +1,3 @@
-mod metadata;
 mod raw_file;
 mod sqlitend;
 
@@ -30,13 +29,7 @@ const OPFS_VFS: &str = "opfs";
 #[cfg(feature = "sqlite3mc")]
 const OPFS_VFS: &str = "multipleciphers-opfs";
 
-const OPFS_VFS_DIR: &str = if cfg!(feature = "sqlite3mc") {
-    "sqlight-sahpool-mc"
-} else if cfg!(feature = "sqlcipher") {
-    "sqlight-sahpool-sqlcipher"
-} else {
-    "sqlight-sahpool"
-};
+const OPFS_VFS_DIR: &str = "sqlight-sahpool";
 
 const MAX_DATABASE_FILENAME_BYTES: usize = 499;
 const MAX_FILE_FILENAME_BYTES: usize = 511;
@@ -80,10 +73,18 @@ impl SQLiteWorker {
         }
         self.ensure_autocommit()?;
         self.ensure_fs().await?;
-        if !self.contains(&options.filename)? {
-            return Err(WorkerError::MissingDatabase(options.filename));
-        }
         self.reserve_opfs(3).await?;
+        if !self.contains(&options.filename)? {
+            for suffix in ["-journal", "-wal", "-shm"] {
+                if self.contains(&format!("{}{suffix}", options.filename))? {
+                    return Err(WorkerError::CreateDb(format!(
+                        "A log file already exists for {}; restore its main database before opening it",
+                        options.filename
+                    )));
+                }
+            }
+            self.initialize_main(&options)?;
+        }
         self.db = None;
         self.options = None;
         self.db = Some(SQLiteDb::open(&uri(&options.filename), options.read_only)?);
@@ -120,6 +121,18 @@ impl SQLiteWorker {
         Ok(())
     }
 
+    fn initialize_main(&self, options: &OpenOptions) -> Result<()> {
+        if options.read_only {
+            initialize_empty_db(&options.filename)
+        } else {
+            self.opfs
+                .as_ref()
+                .unwrap()
+                .import_db_unchecked(&options.filename, &[])
+                .map_err(|error| WorkerError::Filesystem(error.to_string()))
+        }
+    }
+
     fn ensure_autocommit(&self) -> Result<()> {
         if self.db.as_ref().is_some_and(|db| !db.is_autocommit()) {
             return Err(WorkerError::ActiveTransaction);
@@ -133,17 +146,6 @@ impl SQLiteWorker {
         self.options = None;
         if let Some(opfs) = &self.opfs {
             opfs.pause().map_err(|_| WorkerError::Unexpected)?;
-        }
-        Ok(())
-    }
-
-    fn close_workspace(&mut self, workspace: &str) -> Result<()> {
-        if self
-            .options
-            .as_ref()
-            .is_some_and(|options| options.workspace == workspace)
-        {
-            self.close()?;
         }
         Ok(())
     }
@@ -203,15 +205,7 @@ impl SQLiteWorker {
         if options.clear_on_prepare {
             self.remove_db()?;
             let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
-            if options.read_only {
-                initialize_empty_db(&options.filename)?;
-            } else {
-                self.opfs
-                    .as_ref()
-                    .unwrap()
-                    .import_db_unchecked(&options.filename, &[])
-                    .map_err(|error| WorkerError::Filesystem(error.to_string()))?;
-            }
+            self.initialize_main(options)?;
             self.reopen()?;
         }
         let db = self.db.as_ref().ok_or(WorkerError::InvalidState)?;
@@ -344,56 +338,14 @@ impl SQLiteWorker {
             }
         }
         self.reserve_opfs(3).await?;
-        // The active connection keeps its key and SQL state while only the new file is opened.
-        let initialized = if cfg!(any(feature = "sqlite3mc", feature = "sqlcipher")) {
-            self.opfs
-                .as_ref()
-                .unwrap()
-                .import_db_unchecked(&filename, &[])
-                .map_err(|error| WorkerError::Filesystem(error.to_string()))
-        } else {
-            initialize_empty_db(&filename)
-        };
-        if let Err(error) = initialized {
-            self.remove_files(&filename)?;
-            return Err(WorkerError::CreateDb(error.to_string()));
-        }
-        Ok(filename)
-    }
-
-    async fn create_scratch(&mut self, filename: String) -> Result<String> {
-        validate_filename(&filename, MAX_DATABASE_FILENAME_BYTES).map_err(WorkerError::CreateDb)?;
-        if is_sidecar(&filename) {
-            return Err(WorkerError::CreateDb(
-                "Choose a main database filename".into(),
-            ));
-        }
-        self.ensure_fs().await?;
-        if self.contains(&filename)? {
-            return Ok(filename);
-        }
-        if metadata::initialized(&filename, false).await? {
-            return Err(WorkerError::MissingDatabase(filename));
-        }
-        for suffix in ["-journal", "-wal", "-shm"] {
-            if self.contains(&format!("{filename}{suffix}"))? {
-                return Err(WorkerError::CreateDb(format!(
-                    "A log file already exists for {filename}"
-                )));
-            }
-        }
-        self.reserve_opfs(3).await?;
+        // Leave the first page for the selected backend's SQL (and optional key).
+        // Creating this separate file does not change the active connection.
         self.opfs
             .as_ref()
             .unwrap()
             .import_db_unchecked(&filename, &[])
-            .map_err(|error| WorkerError::Filesystem(error.to_string()))?;
-        metadata::initialized(&filename, true).await?;
+            .map_err(|error| WorkerError::CreateDb(error.to_string()))?;
         Ok(filename)
-    }
-
-    async fn bootstrap_default(&mut self) -> Result<()> {
-        self.create_scratch("default.db".into()).await.map(|_| ())
     }
 
     fn file_in_use(&self, filename: &str) -> bool {
@@ -464,13 +416,6 @@ impl SQLiteWorker {
             .collect();
         if !in_use.is_empty() {
             return Err(WorkerError::FilesInUse(in_use));
-        }
-        let initialized: HashSet<_> = selected
-            .iter()
-            .map(|name| sidecar_database(name).unwrap_or(name))
-            .collect();
-        for filename in initialized {
-            metadata::initialized(filename, true).await?;
         }
         // Remove main files first, leaving only orphan logs if cleanup fails.
         selected.sort_by_key(|name| is_sidecar(name));
@@ -641,27 +586,9 @@ fn validate_import_db(
     if db.is_empty() {
         return Ok(());
     }
-    // Validate before replacing the current database.
+    // Files may use another backend's encryption, so only check their size.
     if db.len() < 512 || !db.len().is_multiple_of(512) {
         return Err(ImportDbError::InvalidDbSize);
-    }
-    #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
-    {
-        if !db.starts_with(b"SQLite format 3\0") {
-            return Err(ImportDbError::InvalidHeader);
-        }
-        let page_size = u16::from_be_bytes([db[16], db[17]]);
-        let page_size = if page_size == 1 {
-            65536
-        } else {
-            usize::from(page_size)
-        };
-        if !(512..=65536).contains(&page_size) || !page_size.is_power_of_two() {
-            return Err(ImportDbError::InvalidPageSize);
-        }
-        if !db.len().is_multiple_of(page_size) {
-            return Err(ImportDbError::InvalidDbSize);
-        }
     }
     Ok(())
 }
@@ -717,9 +644,6 @@ async fn execute_tasks(
         let response = match request {
             WorkerRequest::Open(options) => WorkerResponse::Open(worker.open(options).await),
             WorkerRequest::Close => WorkerResponse::Close(worker.close()),
-            WorkerRequest::CloseWorkspace(workspace) => {
-                WorkerResponse::CloseWorkspace(worker.close_workspace(&workspace))
-            }
             WorkerRequest::Run(options) => WorkerResponse::Run(worker.run(options).await),
             WorkerRequest::LoadDb(options) => WorkerResponse::LoadDb(worker.load_db(options).await),
             WorkerRequest::LoadDbs(options) => {
@@ -727,12 +651,6 @@ async fn execute_tasks(
             }
             WorkerRequest::CreateDb(filename) => {
                 WorkerResponse::CreateDb(worker.create_db(filename).await)
-            }
-            WorkerRequest::CreateScratch(filename) => {
-                WorkerResponse::CreateScratch(worker.create_scratch(filename).await)
-            }
-            WorkerRequest::BootstrapDefault => {
-                WorkerResponse::BootstrapDefault(worker.bootstrap_default().await)
             }
             WorkerRequest::ListDbs => WorkerResponse::ListDbs(worker.list_dbs().await),
             WorkerRequest::ListFiles => WorkerResponse::ListFiles(worker.list_files().await),

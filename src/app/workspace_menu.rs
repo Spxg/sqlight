@@ -34,8 +34,6 @@ pub fn WorkspaceMenu() -> impl IntoView {
         let key = (state.workspace_id().get(), state.engine().get());
         if !busy.get() && refreshed.get_value().as_ref() != Some(&key) {
             refreshed.set_value(Some(key));
-            state.databases().set(Vec::new());
-            state.files().set(None);
             send_request(state, WorkerRequest::ListFiles);
         }
     });
@@ -68,7 +66,7 @@ pub fn WorkspaceMenu() -> impl IntoView {
             .map(|name| {
                 let exists = state.databases().with(|names| names.contains(&name));
                 let label = if !exists && state.files().read().is_some() {
-                    format!("{name} (Missing)")
+                    format!("{name} (Created on run)")
                 } else {
                     name.clone()
                 };
@@ -142,7 +140,7 @@ pub fn WorkspaceMenu() -> impl IntoView {
                 disabled=busy
                 aside=Some(view! {
                     <MenuAside>
-                        "Choose a database created or uploaded in Database. This selection is saved with the workspace."
+                        "Choose a shared database. A missing main database is created when you run SQL."
                     </MenuAside>
                 }.into_any())
                 on_change=move |event: Event| {
@@ -193,15 +191,11 @@ pub fn WorkspaceMenu() -> impl IntoView {
                 disabled=busy
                 aside=Some(view! {
                     <MenuAside>
-                        "Workspaces using the same engine share files; different engines have separate files."
+                        "All engines share files. Reapply the key when opening an encrypted database."
                     </MenuAside>
                 }.into_any())
                 on_change=move |event| {
-                    batch(move || {
-                        state.engine().set(Engine::from_select(&event_target_value(&event)));
-                        state.files().set(None);
-                        state.databases().set(Vec::new());
-                    });
+                    state.engine().set(Engine::from_select(&event_target_value(&event)));
                 }
             >
                 {[Engine::SQLite, Engine::MultipleCiphers, Engine::SQLCipher]

@@ -64,8 +64,8 @@ export async function checkWorkerRecovery(page) {
     }
     const state = await recoveryPage.evaluate(() => globalThis.__workerRecoveryCheck);
     assert.equal(state.created, 2, 'A snapshot transport error replaces the worker');
-    assert.equal(state.requests.filter((request) => request === 'BootstrapDefault').length, 1,
-      'Running an existing default database does not repeat initialization');
+    assert.equal(state.requests.filter((request) => request === 'Open').length, 2,
+      'Each worker opens the database once and reuses its connection');
 
     // A failed explicit refresh must also discard stale connection/file badges.
     const database = await openFiles(recoveryPage);

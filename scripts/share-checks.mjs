@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { closeFiles, databaseGroup, openFiles, waitForFilesIdle } from './files-helpers.mjs';
 
 export async function checkSharing(page) {
   const browser = page.context().browser();
@@ -231,11 +232,34 @@ export async function checkSharing(page) {
     const scratch = await open(context, scratchHref);
     assert.equal(await scratch.getByRole('tabpanel').count(), 0);
 
-    // Closing the source releases the engine's OPFS lock for the new tab.
+    // Closing the source releases the shared OPFS lock for the new tab.
     await reopened.close();
     await scratch.getByRole('button', { name: 'Run', exact: true }).click();
     await scratch.getByRole('cell', { name: '0', exact: true }).waitFor();
     await scratch.getByText('Finished', { exact: true }).waitFor();
+    const scratchFilename = await scratch.evaluate(() =>
+      JSON.parse(localStorage.getItem('config')).database,
+    );
+    const files = await openFiles(scratch);
+    await files.getByRole('button', { name: 'Disconnect', exact: true }).click();
+    await waitForFilesIdle(scratch, files);
+    scratch.once('dialog', async (dialog) => {
+      assert.ok(dialog.message().includes(scratchFilename));
+      await dialog.accept();
+    });
+    await databaseGroup(files, scratchFilename).getByRole('button', {
+      name: 'Delete', exact: true,
+    }).click();
+    await databaseGroup(files, scratchFilename).waitFor({ state: 'hidden' });
+    await closeFiles(scratch);
+    await scratch.reload();
+    await scratch.waitForFunction((sql) => ace.edit('ace_editor').getValue() === sql, scratchQuery);
+    await scratch.getByRole('button', { name: 'Run', exact: true }).click();
+    await scratch.getByRole('cell', { name: '0', exact: true }).waitFor();
+    await scratch.getByText('Finished', { exact: true }).waitFor();
+    const recreated = await openFiles(scratch);
+    await databaseGroup(recreated, scratchFilename).waitFor();
+    await closeFiles(scratch);
     await scratch.close();
 
     const preserved = await open(context, base.href);

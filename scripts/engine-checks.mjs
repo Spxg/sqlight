@@ -214,7 +214,6 @@ async function checkWorkerContext(page) {
           await request({ Open: { ...database, read_only } }),
         );
         const key = engine === 'sqlite3' ? '' : "PRAGMA key='readonly-key'; ";
-        unwrap(await request({ CreateScratch: database.filename }));
         await open(false);
         await sql(key + `PRAGMA journal_mode=PERSIST;
           CREATE TABLE protected(value);
@@ -242,10 +241,8 @@ async function checkWorkerContext(page) {
         if (unwrap(await request({ CreateDb: created })) !== created)
           throw new Error(`${engine}: CreateDb changed the requested filename`);
         const createdFile = unwrap(await request({ DownloadFile: created }));
-        if (createdFile.filename !== created || (engine === 'sqlite3'
-          ? new TextDecoder().decode(createdFile.data.slice(0, 16)) !== 'SQLite format 3\0'
-          : createdFile.data.length !== 0)) {
-          throw new Error(`${engine}: CreateDb did not initialize a valid downloadable database`);
+        if (createdFile.filename !== created || createdFile.data.length !== 0) {
+          throw new Error(`${engine}: CreateDb did not leave the first database page for SQL`);
         }
         for (const filename of [created, database.filename]) {
           const duplicate = await request({ CreateDb: filename });
@@ -411,7 +408,6 @@ async function checkWorkerContext(page) {
         const target = 'download-wal.db';
         const key = engine === 'sqlite3' ? '' : "PRAGMA key='download-key'; ";
         const attachKey = engine === 'sqlite3' ? '' : "KEY 'download-key'";
-        unwrap(await request({ CreateScratch: main }));
         unwrap(await request({ Open: { filename: main } }));
         await sql(key + `CREATE TABLE connection_marker(value);
           INSERT INTO connection_marker VALUES (123);
@@ -496,8 +492,6 @@ async function checkWorkerContext(page) {
         const deleted = unwrap(await request({ DeleteFiles: [group[2]] }));
         if (deleted.length !== 4 || unwrap(await request('ListFiles')).files.some((file) => group.includes(file.filename)))
           throw new Error(`${engine}: Deleting a sidecar did not delete its complete database group`);
-
-        unwrap(await request({ CreateScratch: 'fs-orphan-source.db' }));
         unwrap(await request({ Open: { filename: 'fs-orphan-source.db' } }));
         await sql(`ATTACH 'fs-orphan.db-wal' AS orphan;
           CREATE TABLE orphan.marker(value); DETACH orphan;`);
@@ -508,32 +502,50 @@ async function checkWorkerContext(page) {
         if (unwrap(await request('ListFiles')).connection)
           throw new Error(`${engine}: Downloading an orphan opened an SQL connection`);
         unwrap(await request({ DeleteFiles: ['fs-orphan.db-wal'] }));
-        unwrap(await request({ CreateScratch: 'deleted-scratch.db' }));
-        unwrap(await request({ DeleteFiles: ['deleted-scratch.db'] }));
-        const missing = await request({ Open: { filename: 'deleted-scratch.db' } });
-        if (missing.Open.Err?.MissingDatabase !== 'deleted-scratch.db'
-          || (await request({ CreateScratch: 'deleted-scratch.db' })).CreateScratch.Err?.MissingDatabase !== 'deleted-scratch.db') {
-          throw new Error(`${engine}: A deleted database was recreated by Open or stale initialization`);
+        for (const suffix of ['-journal', '-wal', '-shm']) {
+          const name = `fs-orphan-${suffix.slice(1)}.db`;
+          unwrap(await request({ Open: { filename: 'fs-orphan-source.db' } }));
+          await sql(`ATTACH '${name}${suffix}' AS orphan;
+            CREATE TABLE orphan.marker(value); DETACH orphan;`);
+          unwrap(await request('Close'));
+          const blocked = await request({ Open: { filename: name } });
+          if (!blocked.Open.Err?.CreateDb || unwrap(await request('ListDbs')).includes(name))
+            throw new Error(`${engine}: Opening a missing main ignored its orphan ${suffix}`);
+          unwrap(await request({ DeleteFiles: [`${name}${suffix}`] }));
         }
-        unwrap(await request('BootstrapDefault'));
+        const readOnlyName = 'auto-readonly.db';
+        unwrap(await request({ Open: { filename: readOnlyName, read_only: true } }));
+        const empty = await sql(`SELECT count(*) AS count FROM sqlite_schema;
+          PRAGMA integrity_check; SELECT sqlite_version() AS version;`);
+        if (value(empty, 'count') !== '0' || value(empty, 'integrity_check') !== "'ok'")
+          throw new Error(`${engine}: Read-only Open did not initialize a missing empty database`);
+        const readOnlyData = unwrap(await request({ DownloadFile: readOnlyName })).data;
+        if (new TextDecoder().decode(readOnlyData.slice(0, 16)) !== 'SQLite format 3\0')
+          throw new Error(`${engine}: Read-only Open left the new database uninitialized`);
+        if ((sqliteErrorCode(await request(run('CREATE TABLE forbidden(value);'))) & 0xff) !== 8)
+          throw new Error(`${engine}: Automatically created read-only database allowed writing`);
+        unwrap(await request('Close'));
+        unwrap(await request({ DeleteFiles: [readOnlyName] }));
+
+        unwrap(await request({ Open: { filename: 'default.db' } }));
         if (unwrap(await request({ DownloadFile: 'default.db' })).data.length !== 0)
-          throw new Error(`${engine}: Default bootstrap wrote plaintext pages before the first key`);
+          throw new Error(`${engine}: Automatic Open wrote plaintext pages before the first key`);
+        unwrap(await request('Close'));
         unwrap(await request({ DeleteFiles: ['default.db'] }));
-        if ((await request('BootstrapDefault')).BootstrapDefault.Err?.MissingDatabase !== 'default.db')
-          throw new Error(`${engine}: Bootstrap recreated a deleted default database`);
+        if ((await request({ DownloadFile: 'default.db' })).DownloadDb.Err?.MissingDatabase !== 'default.db'
+          || (await request({ DownloadBundle: ['default.db'] })).DownloadBundle.Err?.MissingDatabase !== 'default.db'
+          || unwrap(await request('ListFiles')).files.some((file) => file.filename === 'default.db')) {
+          throw new Error(`${engine}: A filesystem operation recreated a deleted database`);
+        }
         unwrap(await request('Close'));
         const peer = await startWorker(engine);
         try {
-          if ((await peer.request('BootstrapDefault')).BootstrapDefault.Err?.MissingDatabase !== 'default.db'
-            || (await peer.request({ CreateScratch: 'deleted-scratch.db' })).CreateScratch.Err?.MissingDatabase !== 'deleted-scratch.db') {
-            throw new Error(`${engine}: Initialization markers did not survive a worker restart`);
-          }
           const snapshot = unwrap(await peer.request('ListFiles'));
-          if (snapshot.connection || snapshot.files.some((file) => ['default.db', 'deleted-scratch.db'].includes(file.filename)))
-            throw new Error(`${engine}: Missing files reappeared in a new worker`);
-          unwrap(await peer.request({ CreateDb: 'deleted-scratch.db' }));
-          if (unwrap(await peer.request({ CreateScratch: 'deleted-scratch.db' })) !== 'deleted-scratch.db')
-            throw new Error(`${engine}: Explicit recreation could not replace a deleted database`);
+          if (snapshot.connection || snapshot.files.some((file) => file.filename === 'default.db'))
+            throw new Error(`${engine}: Listing files after restart recreated a missing database`);
+          unwrap(await peer.request({ Open: { filename: 'default.db' } }));
+          if (unwrap(await peer.request({ DownloadFile: 'default.db' })).data.length !== 0)
+            throw new Error(`${engine}: Open could not recreate a deleted database after restart`);
           unwrap(await peer.request('Close'));
         } finally {
           peer.terminate();
@@ -541,15 +553,20 @@ async function checkWorkerContext(page) {
       }
 
       try {
+        const previousFiles = unwrap(await request('ListFiles'));
+        if (checked.length) {
+          if (!previousFiles.files.some((file) => file.filename === 'cross-engine.db'))
+            throw new Error(`${engine}: Backend switch did not expose the shared filesystem`);
+          unwrap(await request({ Open: { filename: 'cross-engine.db', read_only: true } }));
+          const shared = await sql('SELECT value FROM cross_engine;');
+          if (value(shared, 'value') !== '83')
+            throw new Error(`${engine}: Backend switch changed the shared database contents`);
+          unwrap(await request('Close'));
+          unwrap(await request({ DeleteFiles: previousFiles.files.map((file) => file.filename) }));
+        }
         const initialFiles = unwrap(await request('ListFiles'));
         if (initialFiles.files.length || initialFiles.connection)
           throw new Error(`${engine}: Listing a new filesystem created a database or connection`);
-        const missing = await request({ Open: { filename: 'smoke.db' } });
-        if (missing.Open.Err?.MissingDatabase !== 'smoke.db'
-          || unwrap(await request('ListDbs')).length) {
-          throw new Error(`${engine}: Opening a missing database implicitly created it`);
-        }
-        unwrap(await request({ CreateScratch: 'smoke.db' }));
         unwrap(
           await request({ Open: { filename: 'smoke.db' } }),
         );
@@ -612,6 +629,8 @@ async function checkWorkerContext(page) {
           if (value(await sql('SELECT count(*) AS count FROM persistent;'), 'count') !== '2')
             throw new Error(`${engine}: Failed switch changed the current transaction`);
         }
+        if (unwrap(await request('ListDbs')).includes('other.db'))
+          throw new Error(`${engine}: A rejected switch created its missing database`);
         await sql('ROLLBACK;');
         const exported = unwrap(await request('DownloadDb'));
         unwrap(await request({ LoadDb: { data: exported.data } }));
@@ -635,7 +654,6 @@ async function checkWorkerContext(page) {
         }
 
         if (engine !== 'sqlite3') {
-          unwrap(await request({ CreateScratch: 'encrypted.db' }));
           unwrap(
             await request({
               Open: { filename: 'encrypted.db' },
@@ -677,8 +695,6 @@ async function checkWorkerContext(page) {
           if (!/^'v?\d+\./.test(value(decrypted, 'vec')))
             throw new Error(`${engine}: sqlite-vec failed on an encrypted database`);
         }
-
-        unwrap(await request({ CreateScratch: `smoke-${engine}.db` }));
         unwrap(
           await request({
             Open: { filename: `smoke-${engine}.db` },
@@ -821,7 +837,6 @@ async function checkWorkerContext(page) {
           const source = { filename: `${prefix}-source.db`, workspace: `${prefix}-source` };
           const aName = `${prefix}-a.db`;
           const bName = `${prefix}-b.db`;
-          unwrap(await request({ CreateScratch: source.filename }));
           unwrap(await request({ Open: source }));
           await sql(`CREATE TABLE shared_data(value);
             INSERT INTO shared_data VALUES (1);`);
@@ -911,7 +926,6 @@ async function checkWorkerContext(page) {
               throw new Error(`${engine}: A later oversized filename partially replaced the import batch`);
             }
           }
-          unwrap(await request({ CreateScratch: longMain }));
           unwrap(await request({ Open: { filename: longMain } }));
           await sql(`PRAGMA journal_mode=PERSIST;
             CREATE TABLE long_name(value); INSERT INTO long_name VALUES (42);`);
@@ -954,7 +968,6 @@ async function checkWorkerContext(page) {
             throw new Error(`${engine}: SQLite URI changed the uploaded filename`);
 
           const joined = { filename: `${prefix}-join.db`, workspace: `${prefix}-first` };
-          unwrap(await request({ CreateScratch: joined.filename }));
           unwrap(await request({ Open: joined }));
           const joinedResult = await sql(`ATTACH '${aName}' AS a;
             ATTACH '${bName}' AS b;
@@ -1011,9 +1024,7 @@ async function checkWorkerContext(page) {
           const remaining = unwrap(await request('ListDbs'));
           if (!remaining.includes(aName) || !remaining.includes(bName))
             throw new Error(`${engine}: Dropping context deleted other databases`);
-          unwrap(await request({ CloseWorkspace: 'inactive-workspace' }));
-          await sql('SELECT 1;');
-          unwrap(await request({ CloseWorkspace: selected.workspace }));
+          unwrap(await request('Close'));
           unwrap(await request({
             Open: { filename: aName, workspace: `${prefix}-third`, read_only: true },
           }));
@@ -1050,10 +1061,39 @@ async function checkWorkerContext(page) {
         }
         await checkDownloadWal();
         await checkFilesystem();
+        unwrap(await request({ Open: { filename: 'cross-engine.db' } }));
+        await sql('CREATE TABLE cross_engine(value); INSERT INTO cross_engine VALUES (83);');
+        unwrap(await request('Close'));
         checked.push(engine);
       } finally {
         worker.terminate();
       }
+    }
+    const sqlite = await startWorker('sqlite3');
+    try {
+      const snapshot = await sqlite.request('ListFiles');
+      const files = snapshot.ListFiles.Ok?.files;
+      if (!files?.some((file) => file.filename === 'encrypted.db'))
+        throw new Error('SQLite: Cipher backend files were not shared');
+      const bundle = await sqlite.request({ DownloadBundle: ['encrypted.db'] });
+      const encrypted = bundle.DownloadBundle.Ok?.files.find((file) => file.filename === 'encrypted.db');
+      if (!encrypted || new TextDecoder().decode(encrypted.data.slice(0, 16)) === 'SQLite format 3\0')
+        throw new Error('SQLite: Shared filesystem changed encrypted database bytes');
+      const imported = await sqlite.request({ LoadDbs: {
+        files: [{ filename: 'cross-engine-cipher.db', data: encrypted.data }], replace: false,
+      } });
+      if (!imported.LoadDbs.Ok?.includes('cross-engine-cipher.db'))
+        throw new Error('SQLite: Files upload rejected another backend\'s encrypted database');
+      const copy = await sqlite.request({ DownloadFile: 'cross-engine-cipher.db' });
+      const data = copy.DownloadDb.Ok?.data;
+      if (!data || data.length !== encrypted.data.length
+        || data.some((byte, index) => byte !== encrypted.data[index])) {
+        throw new Error('SQLite: Shared encrypted file upload changed its contents');
+      }
+      if ((await sqlite.request('Close')).Close.Err)
+        throw new Error('SQLite: Shared filesystem did not release its worker');
+    } finally {
+      sqlite.terminate();
     }
     return checked;
   });

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
 use leptos::prelude::*;
 use reactive_stores::Store;
@@ -20,10 +20,11 @@ type Result<T> = std::result::Result<T, WorkerError>;
 type Session = Rc<Mutex<Option<WorkerSession>>>;
 
 thread_local! {
-    static SESSIONS: RefCell<HashMap<Engine, Session>> = RefCell::default();
+    static SESSION: Session = Rc::default();
 }
 
 struct WorkerSession {
+    engine: Engine,
     worker: Worker,
     responses: mpsc::UnboundedReceiver<Result<WorkerResponse>>,
     opened: Option<OpenOptions>,
@@ -32,7 +33,12 @@ struct WorkerSession {
 }
 
 impl WorkerSession {
-    async fn start(uri: &str) -> Result<Self> {
+    async fn start(engine: Engine) -> Result<Self> {
+        let uri = match engine {
+            Engine::SQLite => "./sqlite3_loader.js",
+            Engine::MultipleCiphers => "./sqlite3mc_loader.js",
+            Engine::SQLCipher => "./sqlcipher_loader.js",
+        };
         let options = WorkerOptions::new();
         options.set_type(WorkerType::Module);
         let worker = Worker::new_with_options(uri, &options).map_err(transport_error)?;
@@ -50,6 +56,7 @@ impl WorkerSession {
         worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
 
         let mut session = Self {
+            engine,
             worker,
             responses,
             opened: None,
@@ -130,56 +137,44 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
             WorkerRequest::LoadDb(_) | WorkerRequest::DownloadDb
         );
     let listing = matches!(request, WorkerRequest::ListFiles);
+    let closing = matches!(request, WorkerRequest::Close);
     let workspace = state.workspace_id().get_untracked();
     let engine = state.engine().get_untracked();
-    let pending_database = state.pending_database().get_untracked();
-    let options = OpenOptions {
-        filename: state.with_untracked(GlobalState::database_filename),
-        read_only: state.read_only().get_untracked(),
-        workspace: workspace.clone(),
-    };
-    let session =
-        SESSIONS.with(|sessions| sessions.borrow_mut().entry(engine).or_default().clone());
-    let uri = match engine {
-        Engine::SQLite => "./sqlite3_loader.js",
-        Engine::MultipleCiphers => "./sqlite3mc_loader.js",
-        Engine::SQLCipher => "./sqlcipher_loader.js",
-    };
+    let session = SESSION.with(Clone::clone);
 
     spawn_local(async move {
         let mut session = session.lock().await;
-        let mut initialized = false;
         let response = async {
+            if needs_connection
+                && session
+                    .as_ref()
+                    .is_some_and(|worker| worker.engine != engine)
+            {
+                // Only one backend owns the shared pool. Finish closing SQLite
+                // before releasing its worker and handing the files to another engine.
+                match session
+                    .as_mut()
+                    .unwrap()
+                    .request(WorkerRequest::Close)
+                    .await?
+                {
+                    WorkerResponse::Close(result) => result?,
+                    _ => return Err(WorkerError::Unexpected),
+                }
+                *session = None;
+            }
             if session.is_none() {
-                *session = Some(WorkerSession::start(uri).await?);
+                *session = Some(WorkerSession::start(engine).await?);
             }
             let worker = session.as_mut().unwrap();
             if needs_connection {
-                match worker.connect(options.clone()).await {
-                    Err(WorkerError::MissingDatabase(_))
-                        if running && (options.filename == "default.db" || pending_database) =>
-                    {
-                        let initialization = if options.filename == "default.db" {
-                            WorkerRequest::BootstrapDefault
-                        } else {
-                            WorkerRequest::CreateScratch(options.filename.clone())
-                        };
-                        let result = match worker.request(initialization).await? {
-                            WorkerResponse::BootstrapDefault(result) => result,
-                            WorkerResponse::CreateScratch(result) => result.map(|_| ()),
-                            _ => return Err(WorkerError::Unexpected),
-                        };
-                        initialized = pending_database
-                            && (result.is_ok()
-                                || matches!(result, Err(WorkerError::MissingDatabase(_))));
-                        result?;
-                        worker.connect(options).await?;
-                    }
-                    result => result?,
-                }
-                if running && pending_database {
-                    initialized = true;
-                }
+                worker
+                    .connect(OpenOptions {
+                        filename: state.with_untracked(GlobalState::database_filename),
+                        read_only: state.read_only().get_untracked(),
+                        workspace: workspace.clone(),
+                    })
+                    .await?;
             }
             worker.request(request).await
         }
@@ -189,6 +184,7 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
         // failed switch, Fresh run, or explicit disconnect.
         let mut snapshot_error = None;
         let snapshot = if !listing
+            && !closing
             && !matches!(response, Err(WorkerError::Transport(_)))
             && let Some(worker) = session.as_mut()
         {
@@ -220,23 +216,32 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
         {
             *session = None;
         }
+        if matches!(response, Ok(WorkerResponse::Close(Ok(())))) {
+            *session = None;
+            state.files().update(|snapshot| {
+                if let Some(snapshot) = snapshot {
+                    snapshot.connection = None;
+                    snapshot.in_transaction = false;
+                    for file in &mut snapshot.files {
+                        file.in_use = false;
+                    }
+                }
+            });
+        }
         if state.workspace_id().get_untracked() == workspace
             && state.engine().get_untracked() == engine
         {
-            if initialized {
-                state.pending_database().set(false);
-                state.read_untracked().save();
-            }
             if let Some(snapshot) = snapshot {
                 apply_snapshot(state, snapshot);
             }
             if needs_connection
                 && matches!(response, Err(WorkerError::ActiveTransaction))
-                && let Some(options) = session.as_ref().and_then(|worker| worker.opened.as_ref())
+                && let Some(worker) = session.as_ref()
+                && let Some(options) = worker.opened.as_ref()
             {
                 batch(move || {
+                    state.engine().set(worker.engine);
                     state.database().set(options.filename.clone());
-                    state.pending_database().set(false);
                     state.read_only().set(options.read_only);
                     state.keep_ctx().set(true);
                 });
@@ -244,6 +249,7 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
             }
             if snapshot_error.is_some()
                 || listing && !matches!(response, Ok(WorkerResponse::ListFiles(Ok(_))))
+                || matches!(response, Err(WorkerError::Transport(_)))
             {
                 batch(move || {
                     state.files().set(None);
@@ -387,7 +393,7 @@ async fn handle_response(
                 .last_error()
                 .set(Some(SQLightError::new_worker(error))),
         },
-        WorkerResponse::CreateDb(result) | WorkerResponse::CreateScratch(result) => {
+        WorkerResponse::CreateDb(result) => {
             if let Err(error) = result {
                 state
                     .last_error()
@@ -395,17 +401,12 @@ async fn handle_response(
             }
         }
         WorkerResponse::DeleteFiles(result) => match result {
-            Ok(deleted) => {
-                if deleted.contains(&state.database().get_untracked()) {
-                    state.pending_database().set(false);
-                }
-                state.read_untracked().save();
-            }
+            Ok(_) => {}
             Err(error) => state
                 .last_error()
                 .set(Some(SQLightError::new_worker(error))),
         },
-        WorkerResponse::Close(result) | WorkerResponse::BootstrapDefault(result) => {
+        WorkerResponse::Close(result) => {
             if let Err(error) = result {
                 state
                     .last_error()
@@ -441,7 +442,7 @@ async fn handle_response(
                 .last_error()
                 .set(Some(SQLightError::new_worker(error))),
         },
-        WorkerResponse::Open(_) | WorkerResponse::CloseWorkspace(_) | WorkerResponse::Ready => {
+        WorkerResponse::Open(_) | WorkerResponse::Ready => {
             unreachable!()
         }
     }

@@ -250,7 +250,7 @@ export async function checkWorkspaces(page) {
     assert.equal(created.keep_ctx, true);
     await expectDatabase('created.db');
     const emptyDatabase = await download('created.db');
-    assert.equal(emptyDatabase.subarray(0, 16).toString(), 'SQLite format 3\0');
+    assert.equal(emptyDatabase.length, 0);
 
     const filesBeforeDuplicate = await databaseChoices();
     await createDatabase(initialDatabase, true);
@@ -325,7 +325,7 @@ export async function checkWorkspaces(page) {
     await expectValue('37');
     await setReadOnly(false);
 
-    // Import both files with their own names into the same engine.
+    // Import both files with their own names into the shared filesystem.
     await importDatabases([
       ['a.db', customersDatabase],
       ['b.db', ordersDatabase],
@@ -461,11 +461,15 @@ export async function checkWorkspaces(page) {
     await setReadOnly(false);
     await setFreshDatabase(false);
     await selectEngine('SQLCipher');
-    await importDatabases([[(await config()).database, new Uint8Array(0)]]);
+    const sharedChoices = await databaseChoices();
+    assert.ok(['a.db', 'b.db'].every((name) => sharedChoices.includes(name)),
+      'Changing engines preserves the shared file list');
+    const encryptedFilename = 'encrypted-workspace.db';
+    await importDatabases([[encryptedFilename, new Uint8Array(0)]]);
+    await selectDatabase(encryptedFilename);
     await run(`PRAGMA key='shared-connection-key';
       CREATE TABLE encrypted_data(value INTEGER);
       INSERT INTO encrypted_data VALUES (41);`);
-    const encryptedFilename = (await config()).database;
     const encryptedDownload = await download(encryptedFilename);
     assert.notEqual(encryptedDownload.subarray(0, 16).toString(), 'SQLite format 3\0');
     await run('SELECT value FROM encrypted_data;');
@@ -496,6 +500,10 @@ export async function checkWorkspaces(page) {
     await selectDatabase('b.db');
     await run(ordersQuery);
     await expectValue('37');
+    await selectWorkspace(encryptedReport);
+    await run(`PRAGMA key='shared-connection-key';
+      SELECT count(*) AS reopened_encrypted_rows FROM encrypted_data;`);
+    await expectValue('1');
     await selectWorkspace(persistentCustomers);
     await workspacePage.reload();
     await workspacePage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));

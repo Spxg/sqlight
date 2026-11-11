@@ -64,8 +64,8 @@ fn error_details(error: &SQLightError) -> &'static str {
                 replacing connected databases, or deleting files."
             }
             WorkerError::MissingDatabase(_) => {
-                "Open Database to upload or create this database, or choose another main database \
-                in the workspace settings. Your SQL draft is preserved."
+                "Refresh Database and select an existing file for this operation. \
+                Running SQL automatically creates a missing main database."
             }
             WorkerError::FilesInUse(_) => {
                 "Disconnect the SQL connection in Database before deleting its main or attached databases."
@@ -78,7 +78,7 @@ fn error_details(error: &SQLightError) -> &'static str {
                 Close that tab and try again."
             }
             WorkerError::Transport(_) => {
-                "Reload the page and check the browser console for details."
+                "Try the operation again. If it still fails, reload the page and check the browser console."
             }
         },
         SQLightError::AceEditor(_) => "Please report this error on GitHub.",

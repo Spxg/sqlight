@@ -209,7 +209,6 @@ fn handle_save_state(state: Store<GlobalState>) {
             state.workspaces().track();
             state.read_only().track();
             state.database().track();
-            state.pending_database().track();
         },
         move |_, _, _| {
             if let Some(timeout) = pending.get_value() {

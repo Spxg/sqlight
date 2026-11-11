@@ -71,7 +71,6 @@ fn file_size(size: u64) -> String {
 }
 
 fn workspace_references(state: Store<GlobalState>, filename: &str) -> Vec<String> {
-    let engine = state.engine().get();
     let mut names = Vec::new();
     if state.database().get() == filename {
         names.push(state.workspace_name().get());
@@ -80,7 +79,7 @@ fn workspace_references(state: Store<GlobalState>, filename: &str) -> Vec<String
         names.extend(
             workspaces
                 .iter()
-                .filter(|workspace| workspace.engine == engine && workspace.database == filename)
+                .filter(|workspace| workspace.database == filename)
                 .map(|workspace| workspace.name.clone()),
         );
     });
@@ -117,7 +116,7 @@ fn delete_files(state: Store<GlobalState>, filenames: Vec<String>) {
     );
     if !references.is_empty() {
         message.push_str(&format!(
-            "\n\nUsed by workspaces: {}. Their main database will be marked Missing.",
+            "\n\nUsed by workspaces: {}. Their next run will create an empty database.",
             references.join(", "),
         ));
     }
@@ -134,7 +133,7 @@ pub fn DatabaseMenu(upload: Callback<()>) -> impl IntoView {
     let zip = RwSignal::new(true);
     let name = RwSignal::new(String::new());
     let creating = RwSignal::new(false);
-    let refreshed = StoredValue::new(None);
+    let refreshed = StoredValue::new(false);
     let groups = Memo::new(move |_| {
         state
             .files()
@@ -161,9 +160,8 @@ pub fn DatabaseMenu(upload: Callback<()>) -> impl IntoView {
     });
 
     Effect::new(move || {
-        let engine = state.engine().get();
-        if !busy.get() && refreshed.get_value() != Some(engine) {
-            refreshed.set_value(Some(engine));
+        if !busy.get() && !refreshed.get_value() {
+            refreshed.set_value(true);
             send_request(state, WorkerRequest::ListFiles);
         }
     });
@@ -215,10 +213,7 @@ pub fn DatabaseMenu(upload: Callback<()>) -> impl IntoView {
     view! {
         <MenuGroup title="Database".into() wide=true>
             <p class=styles::scope>
-                {move || format!(
-                    "{} · Files are shared by workspaces using this engine.",
-                    state.engine().get().value(),
-                )}
+                "All workspaces and SQLite engines share these database files."
             </p>
             <div class=styles::toolbar>
                 <div>
@@ -394,15 +389,15 @@ pub fn DatabaseMenu(upload: Callback<()>) -> impl IntoView {
                     </ButtonSet>
                 </div>
                 <p class=styles::hint>
-                    "Deleting a database also removes its logs. Workspaces using it will show Missing. \
-                    Finish active transactions before deleting files."
+                    "Deleting a database also removes its logs. Workspaces using it create an empty \
+                    database next run. Finish active transactions first."
                 </p>
             </div>
             <Show when=move || {
                 state.files().with(|files| files.is_some())
                     && groups.with(BTreeMap::is_empty) && !busy.get()
             }>
-                <p class=styles::empty>"No files in this engine yet. Create a database or upload files."</p>
+                <p class=styles::empty>"No database files yet. Create a database or upload files."</p>
             </Show>
             <div class=styles::groups>
                 <For
