@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { checkEditor } from './editor-checks.mjs';
 import { checkEngineSelection, checkWorkers } from './engine-checks.mjs';
+import { checkExecutionProgress } from './loading-checks.mjs';
 
 const dist = fileURLToPath(new URL('../dist/', import.meta.url));
 const types = {
@@ -74,13 +75,23 @@ async function closeMenu() {
 try {
   await page.goto(origin);
   await page.waitForFunction(() =>
-    globalThis.ace?.edit('ace_editor').getValue().includes('Hello World!'),
+    globalThis.ace?.edit('ace_editor').getValue().includes('demo_books'),
   );
   await page.getByRole('button', { name: 'Run', exact: true }).click();
-  await page
-    .getByRole('cell', { name: "'Hello World!'", exact: true })
-    .waitFor();
   await page.getByText('Finished', { exact: true }).waitFor();
+  const exampleTables = page.getByRole('table');
+  assert.equal(await exampleTables.count(), 2);
+  assert.equal(await exampleTables.first().locator('tbody tr').count(), 4);
+  assert.deepEqual(
+    await exampleTables
+      .last()
+      .locator('tbody tr')
+      .last()
+      .locator('td')
+      .allTextContents(),
+    ["'Small, Fast, Reliable'", '0', '0'],
+  );
+  await checkExecutionProgress(page);
 
   // Changes are saved even when the SQL has never been run.
   await edit("SELECT 'saved without running' AS message;");

@@ -8,21 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{SQLightError, SQLiteStatementResult, SendWrapper};
 
-const DEFAULT_CODE: &str = "PRAGMA page_size=4096;
-
-CREATE TABLE IF NOT EXISTS blobs (
-    id INTEGER PRIMARY KEY,
-    data BLOB
-);
-
-INSERT INTO blobs(data) VALUES (randomblob(12));
-
-SELECT 'Hello World!',
-        datetime('now','localtime') AS TM,
-        unhex('73716c69676874') AS BLOB_VAL,
-        NULL as NULL_VAL;
-
-SELECT * FROM blobs;";
+const DEFAULT_SQL: &str = include_str!("default.sql");
 
 #[derive(Store, Serialize, Deserialize)]
 #[serde(default)]
@@ -69,7 +55,7 @@ impl Default for GlobalState {
             orientation: Orientation::Automatic,
             theme: Theme::System,
             keep_ctx: false,
-            sql: DEFAULT_CODE.into(),
+            sql: DEFAULT_SQL.into(),
             run_selected_sql: false,
             engine: Engine::SQLite,
             editor: None,

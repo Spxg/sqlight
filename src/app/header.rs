@@ -113,7 +113,7 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
                 } else {
                     code
                 },
-                clear_on_prepare: !*state.keep_ctx().read_untracked(),
+                clear_on_prepare: !state.keep_ctx().get_untracked(),
             }),
         );
     })
@@ -273,7 +273,7 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
             WorkerRequest::Run(RunOptions {
                 embed: true,
                 sql,
-                clear_on_prepare: !*state.keep_ctx().read_untracked(),
+                clear_on_prepare: !state.keep_ctx().get_untracked(),
             }),
         );
 
