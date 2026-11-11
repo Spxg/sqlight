@@ -1,0 +1,53 @@
+name: Checks
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install Rust toolchain and components
+        run: |
+          rustup show
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - run: npm ci
+      - run: npm run assets
+
+      - name: Test configuration and persistence contracts
+        run: cargo test --lib --no-default-features
+
+      - name: Check Rust code
+        run: cargo clippy --target wasm32-unknown-unknown --workspace --all-targets --all-features -- -D warnings
+
+      - uses: cargo-bins/cargo-binstall@v1.26.2
+      - run: cargo binstall --no-confirm --version 0.22.1 trunk
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Check browser behavior
+        run: npm run test:browser

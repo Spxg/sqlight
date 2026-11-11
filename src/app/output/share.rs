@@ -1,5 +1,3 @@
-use std::{sync::Arc, time::Duration};
-
 use istyles::istyles;
 use leptos::prelude::*;
 use reactive_stores::Store;
@@ -10,57 +8,52 @@ use crate::app::{GlobalState, GlobalStateStoreFields, icon::clipboard_icon};
 istyles!(styles, "assets/module.postcss/output/share.module.css.map");
 
 #[component]
-fn Copied<S, H>(shared: S, href: H, children: Children) -> impl IntoView
-where
-    S: Fn() -> String + Send + Sync + 'static,
-    H: Fn() -> String + Send + Sync + 'static,
-{
-    let (copied, set_copied) = signal(false);
-    let shared = Arc::new(shared);
+pub fn Share() -> impl IntoView {
+    let state = expect_context::<Store<GlobalState>>();
+    let (copy_status, set_copy_status) = signal("");
+
+    Effect::new(move || {
+        state.share_href().track();
+        set_copy_status.set("");
+    });
 
     let copy = move |_| {
-        let shared = Arc::clone(&shared);
+        let Some(href) = state.share_href().get_untracked() else {
+            return;
+        };
+
+        set_copy_status.set("Copying…");
         spawn_local(async move {
-            set_copied.set(true);
-            if let Err(err) =
-                JsFuture::from(window().navigator().clipboard().write_text(&shared())).await
-            {
-                log::error!("Failed to write href to clipboard: {err:?}");
-            }
-            set_timeout(move || set_copied.set(false), Duration::from_millis(1000));
+            let result = JsFuture::from(window().navigator().clipboard().write_text(&href)).await;
+            let _ = set_copy_status.try_set(if result.is_ok() {
+                "Copied!"
+            } else {
+                "Copy failed. Copy the link directly."
+            });
         });
     };
 
     view! {
-        <p class=move || { if *copied.read() { styles::active } else { styles::container } }>
-            <a href=href target="_blank">
-                {children()}
-            </a>
-            <button class=styles::button on:click=copy>
-                {clipboard_icon()}
-            </button>
-            <span class=styles::text>"Copied!"</span>
-        </p>
-    }
-}
-
-#[component]
-fn EmbeddedLinks() -> impl IntoView {
-    let state = expect_context::<Store<GlobalState>>();
-    let shared = move || state.share_href().get_untracked().unwrap_or_default();
-    let href = move || state.share_href().get_untracked().unwrap_or_default();
-    view! {
-        <Copied shared=shared href=href>
-            "Embedded code in link"
-        </Copied>
-    }
-}
-
-#[component]
-pub fn Share() -> impl IntoView {
-    view! {
-        <>
-            <EmbeddedLinks />
-        </>
+        <Show when=move || state.share_href().read().is_some()>
+            <p class=styles::container>
+                <a
+                    href=move || state.share_href().get()
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    "Embedded code in link"
+                </a>
+                <button
+                    type="button"
+                    class=styles::button
+                    aria-label="Copy share link"
+                    disabled=move || copy_status.get() == "Copying…"
+                    on:click=copy
+                >
+                    <span aria-hidden="true">{clipboard_icon()}</span>
+                </button>
+                <span role="status">{copy_status}</span>
+            </p>
+        </Show>
     }
 }

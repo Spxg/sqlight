@@ -1,7 +1,7 @@
+use std::ffi::{CStr, CString};
+
 use sqlite_wasm_rs::*;
 use sqlite_wasm_vec::sqlite3_vec_init;
-use std::ffi::{CStr, CString};
-use std::sync::Arc;
 
 use crate::{
     InnerError, SQLiteStatementResult, SQLiteStatementTable, SQLiteStatementValues, SQLitendError,
@@ -9,261 +9,194 @@ use crate::{
 
 type Result<T> = std::result::Result<T, SQLitendError>;
 
-fn cstr(s: &str) -> Result<CString> {
-    CString::new(s).map_err(|_| SQLitendError::ToCStr)
-}
-
-fn sqlite_err(code: i32, db: *mut sqlite3) -> InnerError {
-    let message = unsafe {
-        let ptr = sqlite3_errmsg(db);
-        CStr::from_ptr(ptr).to_string_lossy().to_string()
-    };
+fn sqlite_error(code: i32, db: *mut sqlite3) -> InnerError {
+    let message = unsafe { CStr::from_ptr(sqlite3_errmsg(db)) }
+        .to_string_lossy()
+        .into_owned();
     InnerError { code, message }
 }
 
 pub struct SQLiteDb {
-    sqlite3: *mut sqlite3,
+    handle: *mut sqlite3,
 }
-
-unsafe impl Send for SQLiteDb {}
-unsafe impl Sync for SQLiteDb {}
 
 impl SQLiteDb {
     pub fn is_autocommit(&self) -> bool {
-        unsafe { sqlite3_get_autocommit(self.sqlite3) != 0 }
+        unsafe { sqlite3_get_autocommit(self.handle) != 0 }
     }
 
-    pub fn open(filename: &str) -> Result<Arc<Self>> {
+    pub fn open(filename: &str) -> Result<Self> {
         unsafe {
-            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+            sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(
+                    *mut sqlite3,
+                    *mut *mut i8,
+                    *const sqlite3_api_routines,
+                ) -> i32,
+            >(sqlite3_vec_init as *const ())));
         }
-
-        let mut sqlite3 = std::ptr::null_mut();
-        let ret = unsafe {
+        let filename = CString::new(filename).map_err(|_| SQLitendError::ToCStr)?;
+        let mut handle = std::ptr::null_mut();
+        let code = unsafe {
             sqlite3_open_v2(
-                cstr(filename)?.as_ptr().cast(),
-                &mut sqlite3 as *mut _,
-                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                filename.as_ptr(),
+                &mut handle,
+                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI,
                 std::ptr::null(),
             )
         };
-
-        if ret != SQLITE_OK {
-            return Err(SQLitendError::OpenDb(sqlite_err(ret, sqlite3)));
+        if code != SQLITE_OK {
+            let error = sqlite_error(code, handle);
+            unsafe { sqlite3_close(handle) };
+            return Err(SQLitendError::OpenDb(error));
         }
-
-        Ok(Arc::new(Self { sqlite3 }))
+        Ok(Self { handle })
     }
 
-    pub fn prepare(self: &Arc<Self>, sql: &str) -> Result<SQLiteStatements> {
-        let sql = cstr(sql)?;
-        let tail = sql.as_ptr();
-
+    pub fn prepare(&self, sql: &str) -> Result<SQLiteStatements<'_>> {
         Ok(SQLiteStatements {
-            sql,
-            db: Arc::clone(self),
-            tail,
+            sql: CString::new(sql).map_err(|_| SQLitendError::ToCStr)?,
+            db: self,
+            offset: 0,
         })
     }
 }
 
 impl Drop for SQLiteDb {
     fn drop(&mut self) {
-        unsafe {
-            sqlite3_close(self.sqlite3);
-        }
+        unsafe { sqlite3_close(self.handle) };
     }
 }
 
-pub struct SQLiteStatements {
+pub struct SQLiteStatements<'db> {
     sql: CString,
-    db: Arc<SQLiteDb>,
-    tail: *const i8,
+    db: &'db SQLiteDb,
+    offset: usize,
 }
 
-unsafe impl Send for SQLiteStatements {}
-unsafe impl Sync for SQLiteStatements {}
-
-impl SQLiteStatements {
-    pub fn prepare_next(&mut self) -> Result<Option<SQLitePreparedStatement>> {
-        if self.tail.is_null() {
-            return Ok(None);
+impl SQLiteStatements<'_> {
+    pub fn results(mut self) -> Result<Vec<SQLiteStatementResult>> {
+        let mut results = Vec::new();
+        while self.offset < self.sql.as_bytes().len() {
+            let mut handle = std::ptr::null_mut();
+            let mut tail = std::ptr::null();
+            let start = self.offset;
+            let code = unsafe {
+                sqlite3_prepare_v3(
+                    self.db.handle,
+                    self.sql.as_ptr().add(start),
+                    -1,
+                    0,
+                    &mut handle,
+                    &mut tail,
+                )
+            };
+            if code != SQLITE_OK {
+                return Err(SQLitendError::Prepare(sqlite_error(code, self.db.handle)));
+            }
+            self.offset = tail as usize - self.sql.as_ptr() as usize;
+            // Empty statements and comments do not produce a prepared statement.
+            if handle.is_null() {
+                continue;
+            }
+            let statement = PreparedStatement {
+                db: self.db,
+                handle,
+            };
+            let sql = unsafe { CStr::from_ptr(sqlite3_sql(handle)) }
+                .to_string_lossy()
+                .into_owned();
+            results.push(SQLiteStatementResult::Step(SQLiteStatementTable {
+                sql,
+                position: [start, self.offset],
+                values: statement.values()?,
+            }));
         }
-
-        let sqlite3 = self.db.sqlite3;
-        let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
-        let mut tail = std::ptr::null();
-
-        let ret = unsafe {
-            sqlite3_prepare_v3(sqlite3, self.tail, -1, 0, &mut stmt as _, &mut tail as _)
-        };
-
-        if ret != SQLITE_OK {
-            return Err(SQLitendError::Prepare(sqlite_err(ret, sqlite3)));
-        }
-
-        let sql = unsafe { sqlite3_sql(stmt) };
-        if sql.is_null() {
-            return Ok(None);
-        }
-        let sql = unsafe { CStr::from_ptr(sql).to_string_lossy().to_string() };
-
-        let start_offset = self.tail as usize - self.sql.as_ptr() as usize;
-        let end_offset = start_offset + sql.len();
-        let position = [start_offset, end_offset];
-
-        self.tail = tail;
-
-        Ok(Some(SQLitePreparedStatement {
-            sql,
-            position,
-            sqlite3,
-            stmt,
-        }))
-    }
-
-    pub fn stmts_result(self) -> Result<Vec<SQLiteStatementResult>> {
-        let mut result = vec![];
-        for stmt in self {
-            let stmt = stmt?;
-            result.push(stmt.pack(stmt.get_all()?));
-        }
-        result.push(SQLiteStatementResult::Finish);
-        Ok(result)
+        results.push(SQLiteStatementResult::Finish);
+        Ok(results)
     }
 }
 
-impl Iterator for SQLiteStatements {
-    type Item = Result<SQLitePreparedStatement>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.prepare_next().transpose()
-    }
+struct PreparedStatement<'db> {
+    db: &'db SQLiteDb,
+    handle: *mut sqlite3_stmt,
 }
 
-pub struct SQLitePreparedStatement {
-    sql: String,
-    position: [usize; 2],
-    sqlite3: *mut sqlite3,
-    stmt: *mut sqlite3_stmt,
-}
-
-unsafe impl Send for SQLitePreparedStatement {}
-unsafe impl Sync for SQLitePreparedStatement {}
-
-impl SQLitePreparedStatement {
-    /// Stepping to the next line
+impl PreparedStatement<'_> {
     fn step(&self) -> Result<bool> {
-        let ret = unsafe { sqlite3_step(self.stmt) };
-        match ret {
+        match unsafe { sqlite3_step(self.handle) } {
             SQLITE_DONE => Ok(false),
             SQLITE_ROW => Ok(true),
-            code => Err(SQLitendError::Step(sqlite_err(code, self.sqlite3))),
+            code => Err(SQLitendError::Step(sqlite_error(code, self.db.handle))),
         }
     }
 
-    pub fn pack(&self, values: Option<SQLiteStatementValues>) -> SQLiteStatementResult {
-        let values = SQLiteStatementTable {
-            sql: self.sql.clone(),
-            position: self.position,
-            values,
-        };
-        SQLiteStatementResult::Step(values)
-    }
-
-    pub fn get_all(&self) -> Result<Option<SQLiteStatementValues>> {
-        let mut values = match self.get_one()? {
-            Some(value) => value,
-            None => return Ok(None),
-        };
-
-        while let Some(value) = self.get_one()? {
-            for row in value.rows {
-                values.rows.push(row);
-            }
-        }
-
-        Ok(Some(values))
-    }
-
-    /// Get data for all columns of the current row
-    pub fn get_one(&self) -> Result<Option<SQLiteStatementValues>> {
-        if !self.step()? {
+    fn values(&self) -> Result<Option<SQLiteStatementValues>> {
+        let mut has_row = self.step()?;
+        let count = unsafe { sqlite3_column_count(self.handle) };
+        if count == 0 {
             return Ok(None);
         }
-
-        let column_count = unsafe { sqlite3_column_count(self.stmt) };
-
-        let mut column = Vec::with_capacity(column_count as usize);
-        let mut row = Vec::with_capacity(column_count as usize);
-
-        for col_ndx in 0..column_count {
-            // column_name as key
-            let (column_name, column_type) = unsafe {
-                let ptr = sqlite3_column_name(self.stmt, col_ndx);
-                if ptr.is_null() {
-                    return Err(SQLitendError::GetColumnName(
-                        "the column name is a null pointer, this shouldn't happen".into(),
-                    ));
+        let columns = (0..count)
+            .map(|index| {
+                let name = unsafe { sqlite3_column_name(self.handle, index) };
+                if name.is_null() {
+                    return Err(SQLitendError::GetColumnName("Missing column name".into()));
                 }
-                let Ok(column_name) = CStr::from_ptr(ptr).to_str() else {
-                    return Err(SQLitendError::GetColumnName(
-                        "the column name is not a string, this shouldn't happen".into(),
-                    ));
-                };
-                (column_name, sqlite3_column_type(self.stmt, col_ndx))
-            };
-
-            // https://www.sqlite.org/c3ref/column_blob.html
-            let value = unsafe {
-                match column_type {
-                    SQLITE_NULL => "NULL".to_string(),
-                    SQLITE_INTEGER => {
-                        let number = sqlite3_column_int64(self.stmt, col_ndx);
-                        number.to_string()
-                    }
-                    SQLITE_FLOAT => sqlite3_column_double(self.stmt, col_ndx).to_string(),
-                    SQLITE_TEXT => {
-                        let slice = {
-                            let text = sqlite3_column_text(self.stmt, col_ndx);
-                            // get text size, there may be problems if use as cstr
-                            let len = sqlite3_column_bytes(self.stmt, col_ndx);
-                            std::slice::from_raw_parts(text, len as usize)
-                        };
-                        // must be UTF-8 TEXT result
-                        let Ok(text) = std::str::from_utf8(slice) else {
-                            return Err(SQLitendError::Utf8Text);
-                        };
-                        format!("'{text}'")
-                    }
-                    SQLITE_BLOB => {
-                        let slice = {
-                            let blob = sqlite3_column_blob(self.stmt, col_ndx);
-                            let len = sqlite3_column_bytes(self.stmt, col_ndx);
-                            std::slice::from_raw_parts(blob.cast::<u8>(), len as usize)
-                        };
-                        let hex = hex::encode(slice);
-                        format!("x'{hex}'")
-                    }
-                    _ => return Err(SQLitendError::UnsupportColumnType(column_type)),
-                }
-            };
-
-            column.push(column_name.into());
-            row.push(value);
+                unsafe { CStr::from_ptr(name) }
+                    .to_str()
+                    .map(str::to_owned)
+                    .map_err(|err| SQLitendError::GetColumnName(err.to_string()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut rows = Vec::new();
+        while has_row {
+            let row = (0..count)
+                .map(|index| self.column_value(index))
+                .collect::<Result<Vec<_>>>()?;
+            rows.push(row);
+            has_row = self.step()?;
         }
+        Ok(Some(SQLiteStatementValues { columns, rows }))
+    }
 
-        Ok(Some(SQLiteStatementValues {
-            columns: column,
-            rows: vec![row],
-        }))
+    fn column_value(&self, index: i32) -> Result<String> {
+        // SQLite owns these buffers until the statement advances or is finalized.
+        unsafe {
+            match sqlite3_column_type(self.handle, index) {
+                SQLITE_NULL => Ok("NULL".into()),
+                SQLITE_INTEGER => Ok(sqlite3_column_int64(self.handle, index).to_string()),
+                SQLITE_FLOAT => Ok(sqlite3_column_double(self.handle, index).to_string()),
+                SQLITE_TEXT => {
+                    let ptr = sqlite3_column_text(self.handle, index);
+                    let length = sqlite3_column_bytes(self.handle, index) as usize;
+                    let bytes = if length == 0 {
+                        &[]
+                    } else {
+                        std::slice::from_raw_parts(ptr, length)
+                    };
+                    let text = std::str::from_utf8(bytes).map_err(|_| SQLitendError::Utf8Text)?;
+                    Ok(format!("'{}'", text.replace('\'', "''")))
+                }
+                SQLITE_BLOB => {
+                    let ptr = sqlite3_column_blob(self.handle, index);
+                    let length = sqlite3_column_bytes(self.handle, index) as usize;
+                    let bytes = if length == 0 {
+                        &[]
+                    } else {
+                        std::slice::from_raw_parts(ptr.cast::<u8>(), length)
+                    };
+                    Ok(format!("x'{}'", hex::encode(bytes)))
+                }
+                kind => Err(SQLitendError::UnsupportedColumnType(kind)),
+            }
+        }
     }
 }
 
-impl Drop for SQLitePreparedStatement {
+impl Drop for PreparedStatement<'_> {
     fn drop(&mut self) {
-        unsafe {
-            sqlite3_finalize(self.stmt);
-        };
+        unsafe { sqlite3_finalize(self.handle) };
     }
 }

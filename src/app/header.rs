@@ -2,11 +2,14 @@ use istyles::istyles;
 use leptos::{html::Input, prelude::*, tachys::html};
 use reactive_stores::Store;
 use sqlformat::{FormatOptions, QueryParams};
-use wasm_bindgen::{JsCast, prelude::Closure};
-use web_sys::{Blob, Event, FileReader, HtmlInputElement, MouseEvent, Url, UrlSearchParams};
+use std::time::Duration;
+
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::{JsFuture, spawn_local};
+use web_sys::{Blob, BlobPropertyBag, Event, HtmlInputElement, MouseEvent, Url, UrlSearchParams};
 
 use crate::{
-    FragileComfirmed, LoadDbOptions, RunOptions, SQLightError, WorkerRequest,
+    LoadDbOptions, RunOptions, SQLightError, SendWrapper, WorkerRequest,
     app::{
         ImportProgress,
         advanced_options_menu::AdvancedOptionsMenu,
@@ -28,6 +31,7 @@ istyles!(styles, "assets/module.postcss/header.module.css.map");
 
 #[component]
 pub fn Header() -> impl IntoView {
+    let state = expect_context::<Store<GlobalState>>();
     let menu_container = NodeRef::new();
 
     let input_ref = NodeRef::new();
@@ -49,7 +53,12 @@ pub fn Header() -> impl IntoView {
                     </ButtonSet>
                 </div>
                 <div class=styles::right>
-                    <input type="file" node_ref=input_ref style="display: none" />
+                    <input
+                        type="file"
+                        node_ref=input_ref
+                        style="display: none"
+                        on:change=move |event| import_database(state, event)
+                    />
 
                     <ButtonSet>
                         <ShareButton />
@@ -76,6 +85,9 @@ pub fn Header() -> impl IntoView {
 
 pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
     Box::new(move || {
+        if state.is_running().get_untracked() {
+            return;
+        }
         let editor_guard = state.editor().read_untracked();
         let Some(editor) = editor_guard.as_ref() else {
             return;
@@ -87,10 +99,10 @@ pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
 
         state.sql().set(code.clone());
         change_focus(state, Some(Focus::Execute));
-        std::mem::take(&mut *state.output().write());
+        state.output().set(Vec::new());
 
         let run_selected_code =
-            !selected_code.is_empty() && state.run_selected_sql().get_untracked();
+            !selected_code.trim().is_empty() && state.run_selected_sql().get_untracked();
 
         send_request(
             state,
@@ -114,7 +126,12 @@ fn ExecuteButton() -> impl IntoView {
     let on_click = execute(state);
 
     view! {
-        <Button is_primary=true icon_right=build_icon() on_click=move |_| on_click()>
+        <Button
+            is_primary=true
+            icon_right=build_icon()
+            disabled=Signal::derive(move || state.is_running().get())
+            on_click=move |_| on_click()
+        >
             "Run"
         </Button>
     }
@@ -193,7 +210,7 @@ fn ConfigMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoVie
 fn AdvancedOptionsMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
     let button = |toggle, node_ref| {
         view! {
-            <IconButton on_click=toggle node_ref=node_ref>
+            <IconButton label="Advanced options" on_click=toggle node_ref=node_ref>
                 {more_options_icon()}
             </IconButton>
         }
@@ -223,7 +240,7 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
     };
 
     let on_format = move |_event, signal: WriteSignal<bool>| {
-        let Some(editor) = &*state.editor().read() else {
+        let Some(editor) = &*state.editor().read_untracked() else {
             return;
         };
 
@@ -303,85 +320,8 @@ fn DatabaseButton(
         .into_any()
     };
 
-    let (file, set_file) = signal::<Option<FragileComfirmed<web_sys::File>>>(None);
-
-    Effect::new(move || {
-        if let Some(file) = &*file.read() {
-            let filename = file.name();
-
-            if let Ok(reader) = FileReader::new() {
-                let on_progress = FragileComfirmed::new(Closure::wrap(Box::new(
-                    move |ev: web_sys::ProgressEvent| {
-                        if ev.length_computable() {
-                            state.import_progress().set(Some(ImportProgress {
-                                filename: filename.clone(),
-                                loaded: ev.loaded(),
-                                total: ev.total(),
-                                opened: None,
-                            }));
-                        }
-                    },
-                )
-                    as Box<dyn FnMut(_)>));
-
-                let on_error = FragileComfirmed::new(Closure::wrap(Box::new(
-                    move |ev: web_sys::ProgressEvent| {
-                        let target = ev.target().unwrap();
-                        let reader = target.unchecked_into::<FileReader>();
-                        let dom_error = reader.error().unwrap();
-                        state.last_error().set(Some(FragileComfirmed::new(
-                            SQLightError::ImportDb(dom_error.message().to_string()),
-                        )));
-                    },
-                )
-                    as Box<dyn FnMut(_)>));
-
-                let on_load =
-                    FragileComfirmed::new(Closure::wrap(Box::new(move |ev: web_sys::Event| {
-                        let target = ev.target().unwrap();
-                        let reader = target.unchecked_into::<FileReader>();
-                        let result = reader.result().unwrap();
-                        let array_buffer = result.unchecked_into::<js_sys::ArrayBuffer>();
-                        let data = js_sys::Uint8Array::new(&array_buffer);
-                        send_request(state, WorkerRequest::LoadDb(LoadDbOptions { data }));
-                    })
-                        as Box<dyn FnMut(_)>));
-
-                reader.set_onprogress(Some(on_progress.as_ref().unchecked_ref()));
-                reader.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-                reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
-                reader.read_as_array_buffer(file).unwrap();
-
-                on_cleanup(move || {
-                    drop(on_progress);
-                    drop(on_error);
-                    drop(on_load);
-                });
-            }
-        }
-    });
-
-    let on_change = move |ev: Event| {
-        if let Some(target) = ev.target() {
-            let input = target.unchecked_into::<HtmlInputElement>();
-            if let Some(files) = input.files() {
-                if files.length() > 0 {
-                    let file = FragileComfirmed::new(files.get(0).unwrap());
-                    set_file.set(Some(file));
-                } else {
-                    set_file.set(None);
-                }
-            }
-        }
-    };
-
     let on_load = move |_: MouseEvent, signal: WriteSignal<bool>| {
-        if let Some(input) = &*input_ref.read() {
-            if input.onchange().is_none() {
-                let callback = Closure::wrap(Box::new(on_change) as Box<dyn Fn(Event)>);
-                input.set_onchange(Some(callback.as_ref().unchecked_ref::<js_sys::Function>()));
-                callback.forget();
-            }
+        if let Some(input) = input_ref.get_untracked() {
             input.set_value("");
             input.click();
         }
@@ -399,7 +339,9 @@ fn DatabaseButton(
         let array = js_sys::Array::new();
         array.push(&buffer);
 
-        let blob = Blob::new_with_u8_array_sequence(&array).unwrap();
+        let options = BlobPropertyBag::new();
+        options.set_type("application/vnd.sqlite3");
+        let blob = Blob::new_with_u8_array_sequence_and_options(&array, &options).unwrap();
         let url = Url::create_object_url_with_blob(&blob).unwrap();
 
         let document = document();
@@ -411,9 +353,13 @@ fn DatabaseButton(
 
         a.set_href(&url);
         a.set_download(&filename);
+        document.body().unwrap().append_child(&a).unwrap();
         a.click();
-
-        Url::revoke_object_url(&url).unwrap();
+        a.remove();
+        set_timeout(
+            move || Url::revoke_object_url(&url).unwrap(),
+            Duration::from_secs(1),
+        );
     });
 
     let on_download = move |_: MouseEvent, signal: WriteSignal<bool>| {
@@ -427,6 +373,11 @@ fn DatabaseButton(
             menu=Box::new(move |signal| {
                 view! {
                     <DatabaseMenu
+                        importing=Signal::derive(move || {
+                            state.import_progress().read().as_ref().is_some_and(|progress| {
+                                progress.opened.is_none()
+                            })
+                        })
                         load=move |e| on_load(e, signal)
                         download=move |e| on_download(e, signal)
                     />
@@ -445,7 +396,7 @@ fn ShareButton() -> impl IntoView {
     let click = move |_| {
         let Some(code) = state
             .editor()
-            .read()
+            .read_untracked()
             .as_ref()
             .map(|editor| editor.get_value())
         else {
@@ -470,5 +421,45 @@ fn ShareButton() -> impl IntoView {
 
 #[component]
 fn GithubButton() -> impl IntoView {
-    view! { <LinkButton href="https://github.com/Spxg/sqlight".into()>{github_icon()}</LinkButton> }
+    view! { <LinkButton href="https://github.com/Spxg/sqlight".into() label="GitHub repository">{github_icon()}</LinkButton> }
+}
+
+fn import_database(state: Store<GlobalState>, event: Event) {
+    let input = event_target::<HtmlInputElement>(&event);
+    let Some(file) = input.files().and_then(|files| files.get(0)) else {
+        return;
+    };
+    let total = file.size();
+    state.last_error().set(None);
+    state.import_progress().set(Some(ImportProgress {
+        filename: file.name(),
+        loaded: 0.0,
+        total,
+        opened: None,
+    }));
+    spawn_local(async move {
+        match JsFuture::from(file.array_buffer()).await {
+            Ok(buffer) => {
+                state.import_progress().update(|progress| {
+                    if let Some(progress) = progress {
+                        progress.loaded = total;
+                    }
+                });
+                let data = js_sys::Uint8Array::new(&buffer);
+                send_request(state, WorkerRequest::LoadDb(LoadDbOptions { data }));
+            }
+            Err(error) => {
+                state.import_progress().update(|progress| {
+                    if let Some(progress) = progress {
+                        progress.opened = Some(false);
+                    }
+                });
+                state
+                    .last_error()
+                    .set(Some(SendWrapper::new(SQLightError::ImportDb(format!(
+                        "{error:?}"
+                    )))));
+            }
+        }
+    });
 }

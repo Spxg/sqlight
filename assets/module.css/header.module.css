@@ -2,11 +2,17 @@
 .left,
 .right {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5em;
+  min-width: 0;
 }
 
 .container {
   font-size: var(--secondary-font-size);
   padding: 1.25em 0;
   justify-content: space-between;
+}
+
+.right {
+  justify-content: flex-end;
 }

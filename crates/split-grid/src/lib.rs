@@ -11,9 +11,6 @@ extern "C" {
     pub fn destroy(this: &Grid);
 }
 
-unsafe impl Send for Grid {}
-unsafe impl Sync for Grid {}
-
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Gutter {
     pub track: i32,

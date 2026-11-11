@@ -1,22 +1,28 @@
+const fs = require('node:fs/promises');
+const path = require('node:path');
+
 module.exports = {
   plugins: [
     require('postcss-simple-vars')(),
-    require('postcss-preset-env')(),
     require('postcss-mixins')(),
-    require("postcss-modules")({
-      getJSON: function(_, json, outputFileName) {
-        var path = require("path");
-        var fs = require("fs");
-        var jsonPath = path.resolve(outputFileName + ".map");
-        var dir = path.dirname(jsonPath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
+    require('postcss-preset-env')(),
+    require('postcss-modules')({
+      async getJSON(_, classes, outputFileName) {
+        const mapPath = `${outputFileName}.map`;
+        await fs.mkdir(path.dirname(mapPath), { recursive: true });
+        const contents = JSON.stringify(classes);
+        const previous = await fs.readFile(mapPath, 'utf8').catch(error => {
+          if (error.code !== 'ENOENT') {
+            throw error;
+          }
+        });
+        if (contents !== previous) {
+          await fs.writeFile(mapPath, contents);
         }
-        fs.writeFileSync(jsonPath, JSON.stringify(json));
       },
     }),
     require('cssnano')({
-      reset: 'default',
+      preset: 'default',
     }),
-  ]
+  ],
 };

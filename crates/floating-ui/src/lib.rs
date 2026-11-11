@@ -29,13 +29,6 @@ extern "C" {
     ) -> js_sys::Function;
 }
 
-#[derive(serde::Serialize)]
-pub struct ComputeOptions {
-    placement: String,
-    #[serde(with = "serde_wasm_bindgen::preserve")]
-    middleware: Array,
-}
-
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputePosition {
@@ -53,7 +46,7 @@ pub struct MiddlewareData {
 
 #[derive(serde::Deserialize, Debug)]
 pub struct ArrowPosition {
-    pub x: f64,
+    pub x: Option<f64>,
 }
 
 pub fn compute_options(offset_value: i32, element: &JsValue) -> JsValue {

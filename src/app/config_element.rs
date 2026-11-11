@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use istyles::istyles;
 use leptos::prelude::*;
 use web_sys::Event;
@@ -12,91 +10,66 @@ istyles!(
 );
 
 #[component]
-pub fn Either<E, V, T>(
-    #[prop(default =None)] aside: Option<AnyView>,
+pub fn Toggle<E, V>(
+    #[prop(default = None)] aside: Option<AnyView>,
     on_change: E,
-    id: String,
-    a: T,
-    b: T,
-    a_label: Option<String>,
-    b_label: Option<String>,
+    id: &'static str,
     value: V,
     name: String,
-    #[prop(default = Box::new(|| true))] is_default: Box<dyn Fn() -> bool + Send>,
 ) -> impl IntoView
 where
-    E: Fn(&T) + Send + Sync + 'static,
-    V: Fn() -> T + Send + Sync + 'static,
-    T: PartialEq + Eq + Send + Sync + ToString + 'static,
+    E: Fn(bool) + Send + Sync + 'static,
+    V: Fn() -> bool + Send + Sync + 'static,
 {
-    let a_label = if let Some(label) = a_label {
-        label
-    } else {
-        a.to_string()
-    };
-
-    let b_label = if let Some(label) = b_label {
-        label
-    } else {
-        b.to_string()
-    };
-
-    let a_id = format!("{id}-a");
-    let b_id = format!("{id}-b");
-
-    let on_change1 = Arc::new(on_change);
-    let on_change2 = Arc::clone(&on_change1);
-
-    let value1 = Arc::new(value);
-    let value2 = Arc::clone(&value1);
-
-    let a_value = a.to_string();
-    let b_value = b.to_string();
-
-    let a1 = Arc::new(a);
-    let a2 = Arc::clone(&a1);
-    let b1 = Arc::new(b);
-    let b2 = Arc::clone(&b1);
+    let value = Signal::derive(value);
+    let on_change = Callback::new(on_change);
+    let on_id = format!("{id}-on");
+    let off_id = format!("{id}-off");
 
     view! {
-        <ConfigElement name=name is_default=is_default aside>
+        <ConfigElement
+            name=name
+            is_default=Box::new(move || !value.get())
+            aside=aside
+        >
             <div class=styles::toggle>
                 <input
-                    id=a_id.clone()
-                    name=id.clone()
-                    value=a_value
+                    id=on_id.clone()
+                    name=id
                     type="radio"
-                    checked=move || value1().eq(&a1)
-                    on:change=move |_ev| on_change1(&a2)
+                    prop:checked=move || value.get()
+                    on:change=move |_| on_change.run(true)
                 />
-                <label for=a_id>{a_label}</label>
+                <label for=on_id>"On"</label>
                 <input
-                    id=b_id.clone()
-                    name=id.clone()
-                    value=b_value
+                    id=off_id.clone()
+                    name=id
                     type="radio"
-                    checked=move || value2().eq(&b1)
-                    on:change=move |_ev| on_change2(&b2)
+                    prop:checked=move || !value.get()
+                    on:change=move |_| on_change.run(false)
                 />
-                <label for=b_id>{b_label}</label>
+                <label for=off_id>"Off"</label>
             </div>
         </ConfigElement>
     }
 }
 
 #[component]
-pub fn Select<E>(
+pub fn Select<E, V>(
     on_change: E,
+    value: V,
     name: String,
     #[prop(default = Box::new(|| true))] is_default: Box<dyn Fn() -> bool + Send>,
     children: Children,
 ) -> impl IntoView
 where
     E: FnMut(Event) + Send + 'static,
+    V: Fn() -> String + Send + 'static,
 {
+    let label = name.clone();
     view! {
         <ConfigElement name=name is_default=is_default>
-            <select class=styles::select on:change=on_change>
+            <select class=styles::select aria-label=label prop:value=value on:change=on_change>
                 {children()}
             </select>
         </ConfigElement>
@@ -106,10 +79,11 @@ where
 #[component]
 pub fn ConfigElement(
     name: String,
-    #[prop(default =None)] aside: Option<AnyView>,
+    #[prop(default = None)] aside: Option<AnyView>,
     #[prop(default = Box::new(|| true))] is_default: Box<dyn Fn() -> bool + Send>,
     children: Children,
 ) -> impl IntoView {
+    let label = name.clone();
     let style = move || {
         if is_default() {
             styles::name
@@ -119,7 +93,7 @@ pub fn ConfigElement(
     };
     view! {
         <MenuItem>
-            <div class=styles::container>
+            <div class=styles::container role="group" aria-label=label>
                 <span class=style>{name}</span>
                 <div class=styles::value>{children()}</div>
             </div>

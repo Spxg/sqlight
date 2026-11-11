@@ -7,6 +7,12 @@
 
 .tabs {
   display: flex;
+  border-right: var(--border);
+}
+
+.tabList {
+  display: flex;
+  flex: 1;
 }
 
 .tab {
@@ -17,10 +23,6 @@
   border-right: none;
   background-color: var(--output-background-tab);
   line-height: 1.5;
-
-  &:last-of-type {
-    border-right: var(--border);
-  }
 }
 
 .tabSelected {
@@ -28,10 +30,6 @@
   cursor: default;
   border-bottom: none;
   background-color: var(--output-current-tab);
-
-  &:focus {
-    outline: none;
-  }
 }
 
 .tabClose {
@@ -44,10 +42,7 @@
   border-top: none;
   background-color: var(--output-current-tab);
   padding: 0.5em;
-  height: 100%;
-  overflow: scroll;
-}
-
-.stdin {
-  margin-top: 0.25em;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }

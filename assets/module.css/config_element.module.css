@@ -60,7 +60,16 @@
   }
 
   & input {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+    overflow: hidden;
+
+    &:focus-visible + label {
+      outline: 2px solid var(--header-tint);
+      outline-offset: 2px;
+    }
 
     &:checked + label {
       border-color: var(--header-tint);

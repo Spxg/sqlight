@@ -5,9 +5,8 @@ use js_sys::Uint8Array;
 use leptos::tachys::dom::window;
 use reactive_stores::Store;
 use serde::{Deserialize, Serialize};
-use web_sys::MediaQueryList;
 
-use crate::{FragileComfirmed, SQLightError, SQLiteStatementResult};
+use crate::{SQLightError, SQLiteStatementResult, SendWrapper};
 
 const DEFAULT_CODE: &str = "PRAGMA page_size=4096;
 
@@ -26,6 +25,7 @@ SELECT 'Hello World!',
 SELECT * FROM blobs;";
 
 #[derive(Store, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GlobalState {
     vfs: Vfs,
     editor_config: EditorConfig,
@@ -37,11 +37,11 @@ pub struct GlobalState {
     multiple_ciphers: bool,
     // runtime state below
     #[serde(skip)]
-    editor: Option<Editor>,
+    editor: Option<SendWrapper<Editor>>,
     #[serde(skip)]
     focus: Option<Focus>,
     #[serde(skip)]
-    is_focused: bool,
+    is_running: bool,
     #[serde(skip)]
     opened_focus: HashSet<Focus>,
     #[serde(skip)]
@@ -53,7 +53,7 @@ pub struct GlobalState {
     #[serde(skip)]
     embed: Vec<SQLiteStatementResult>,
     #[serde(skip)]
-    last_error: Option<FragileComfirmed<SQLightError>>,
+    last_error: Option<SendWrapper<SQLightError>>,
     #[serde(skip)]
     import_progress: Option<ImportProgress>,
     #[serde(skip)]
@@ -73,7 +73,7 @@ impl Default for GlobalState {
             multiple_ciphers: false,
             editor: None,
             focus: None,
-            is_focused: false,
+            is_running: false,
             opened_focus: HashSet::new(),
             share_href: None,
             show_something: false,
@@ -89,18 +89,17 @@ impl Default for GlobalState {
 impl GlobalState {
     pub fn load() -> Option<Self> {
         let storage = window().local_storage().ok()??;
-        let value = storage.get("config").ok()??;
+        let value = storage.get_item("config").ok()??;
         serde_json::from_str(&value).ok()
     }
 
     pub fn save(&self) {
-        if let Some(Err(e)) = window()
-            .local_storage()
-            .ok()
-            .flatten()
-            .map(|s| s.set_item("config", &serde_json::to_string(self).unwrap()))
-        {
-            log::error!("Faild to save config to localstorage: {e:?}");
+        let Ok(Some(storage)) = window().local_storage() else {
+            return;
+        };
+        let value = serde_json::to_string(self).unwrap();
+        if let Err(error) = storage.set_item("config", &value) {
+            log::error!("Failed to save configuration to local storage: {error:?}");
         }
     }
 }
@@ -114,10 +113,11 @@ pub struct ImportProgress {
 
 pub struct Exported {
     pub filename: String,
-    pub data: FragileComfirmed<Uint8Array>,
+    pub data: SendWrapper<Uint8Array>,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct EditorConfig {
     pub keyboard: String,
     pub light_theme: String,
@@ -134,12 +134,6 @@ impl Default for EditorConfig {
     }
 }
 
-impl GlobalState {
-    pub fn is_focus(&self) -> bool {
-        self.focus.is_some()
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Vfs {
     Memory,
@@ -147,10 +141,10 @@ pub enum Vfs {
 }
 
 impl Vfs {
-    pub fn value(&self) -> String {
+    pub fn value(&self) -> &'static str {
         match self {
-            Vfs::Memory => "Memory".into(),
-            Vfs::OPFS => "OPFS".into(),
+            Vfs::Memory => "Memory",
+            Vfs::OPFS => "OPFS",
         }
     }
 }
@@ -164,20 +158,15 @@ pub enum Focus {
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Theme {
+    #[serde(alias = "SystemLight", alias = "SystemDark")]
     System,
-    SystemLight,
-    SystemDark,
     Light,
     Dark,
 }
 
 impl Theme {
-    pub fn is_system(&self) -> bool {
-        matches!(self, Theme::System | Theme::SystemLight | Theme::SystemDark)
-    }
-
-    pub fn from_select(s: &str) -> Self {
-        match s {
+    pub fn from_select(value: &str) -> Self {
+        match value {
             "System" => Self::System,
             "Light" => Self::Light,
             "Dark" => Self::Dark,
@@ -185,58 +174,34 @@ impl Theme {
         }
     }
 
-    pub fn match_media() -> Option<MediaQueryList> {
-        window()
-            .match_media("(prefers-color-scheme: dark)")
-            .ok()
-            .flatten()
-    }
-
-    pub fn value(&self) -> Self {
-        if self.is_system() {
-            Self::match_media()
-                .map(|query| {
-                    if query.matches() {
-                        Theme::SystemDark
-                    } else {
-                        Theme::SystemLight
-                    }
-                })
-                .unwrap_or_else(|| Theme::SystemLight)
-        } else {
-            *self
-        }
-    }
-
-    pub fn select(&self) -> String {
+    pub fn resolve(self, prefers_dark: bool) -> Self {
         match self {
-            Theme::System | Theme::SystemLight | Theme::SystemDark => "System",
-            Theme::Light => "Light",
-            Theme::Dark => "Dark",
+            Self::System if prefers_dark => Self::Dark,
+            Self::System => Self::Light,
+            theme => theme,
         }
-        .into()
+    }
+
+    pub fn select(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
     }
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Orientation {
+    #[serde(alias = "AutoHorizontal", alias = "AutoVertical")]
     Automatic,
-    AutoHorizontal,
-    AutoVertical,
     Horizontal,
     Vertical,
 }
 
 impl Orientation {
-    pub fn is_auto(&self) -> bool {
-        matches!(
-            self,
-            Orientation::Automatic | Orientation::AutoVertical | Orientation::AutoHorizontal
-        )
-    }
-
-    pub fn from_select(s: &str) -> Self {
-        match s {
+    pub fn from_select(value: &str) -> Self {
+        match value {
             "Automatic" => Self::Automatic,
             "Horizontal" => Self::Horizontal,
             "Vertical" => Self::Vertical,
@@ -244,34 +209,64 @@ impl Orientation {
         }
     }
 
-    pub fn match_media() -> Option<MediaQueryList> {
-        window().match_media("(max-width: 1600px)").ok().flatten()
-    }
-
-    pub fn value(&self) -> Self {
-        if self.is_auto() {
-            Self::match_media()
-                .map(|query| {
-                    if query.matches() {
-                        Orientation::AutoHorizontal
-                    } else {
-                        Orientation::AutoVertical
-                    }
-                })
-                .unwrap_or_else(|| Orientation::AutoVertical)
-        } else {
-            *self
-        }
-    }
-
-    pub fn select(&self) -> String {
+    pub fn resolve(self, narrow_screen: bool) -> Self {
         match self {
-            Orientation::Automatic | Orientation::AutoVertical | Orientation::AutoHorizontal => {
-                "Automatic"
-            }
-            Orientation::Horizontal => "Horizontal",
-            Orientation::Vertical => "Vertical",
+            Self::Automatic if narrow_screen => Self::Horizontal,
+            Self::Automatic => Self::Vertical,
+            orientation => orientation,
         }
-        .into()
+    }
+
+    pub fn select(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GlobalState, Orientation, Theme};
+
+    #[test]
+    fn missing_preferences_use_defaults() {
+        let state: GlobalState =
+            serde_json::from_str(r#"{"editor_config":{"keyboard":"vim"}}"#).unwrap();
+
+        assert_eq!(state.editor_config.keyboard, "vim");
+        assert_eq!(state.editor_config.light_theme, "github");
+        assert!(matches!(state.theme, Theme::System));
+        assert!(!state.sql.is_empty());
+    }
+
+    #[test]
+    fn previous_automatic_values_preserve_user_preferences() {
+        let state: GlobalState =
+            serde_json::from_str(r#"{"theme":"SystemDark","orientation":"AutoHorizontal"}"#)
+                .unwrap();
+
+        assert!(matches!(state.theme, Theme::System));
+        assert!(matches!(state.orientation, Orientation::Automatic));
+        assert!(matches!(state.theme.resolve(false), Theme::Light));
+        assert!(matches!(
+            state.orientation.resolve(false),
+            Orientation::Vertical
+        ));
+    }
+
+    #[test]
+    fn runtime_state_is_not_persisted() {
+        let state = GlobalState {
+            is_running: true,
+            ..GlobalState::default()
+        };
+        let value = serde_json::to_value(state).unwrap();
+
+        assert_eq!(value["theme"], "System");
+        assert!(value.get("is_running").is_none());
+        assert!(value.get("editor").is_none());
+        assert!(value.get("output").is_none());
     }
 }

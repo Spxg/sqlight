@@ -5,166 +5,162 @@ use crate::{
     WorkerRequest, WorkerResponse,
 };
 use js_sys::Uint8Array;
-use once_cell::sync::Lazy;
-use sqlite_wasm_rs::WasmOsCallback;
-use sqlite_wasm_rs::vfs::{VfsFilesManager, memvfs::MemVfsUtil, transfer::DbTransfer};
+use sqlite_wasm_rs::{
+    WasmOsCallback,
+    vfs::{VfsFilesManager, memvfs::MemVfsUtil, transfer::DbTransfer},
+};
 use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
-
-use sqlitend::SQLiteDb;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::sync::OnceCell;
-use tokio::sync::mpsc::UnboundedReceiver;
-use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
+use tokio::sync::mpsc;
+use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
+use sqlitend::SQLiteDb;
+
 type Result<T> = std::result::Result<T, WorkerError>;
 
-static DB: Lazy<Mutex<Option<SQLiteWorker>>> = Lazy::new(|| Mutex::new(None));
-
-static FS_UTIL: Lazy<FSUtil> = Lazy::new(|| FSUtil {
-    // All SQLite access is serialized on this dedicated worker.
-    mem: unsafe { MemVfsUtil::get().expect("Failed to initialize memory VFS") },
-    opfs: OnceCell::new(),
-});
-
-#[cfg(feature = "sqlite3")]
+#[cfg(not(feature = "sqlite3mc"))]
 const OPFS_VFS: &str = "opfs";
 #[cfg(feature = "sqlite3mc")]
 const OPFS_VFS: &str = "multipleciphers-opfs";
 
-#[cfg(feature = "sqlite3")]
+#[cfg(not(feature = "sqlite3mc"))]
 const OPFS_VFS_DIR: &str = "sqlight-sahpool";
 #[cfg(feature = "sqlite3mc")]
 const OPFS_VFS_DIR: &str = "sqlight-sahpool-mc";
 
-#[cfg(feature = "sqlite3")]
+#[cfg(not(feature = "sqlite3mc"))]
 const MEM_VFS: &str = "memvfs";
 #[cfg(feature = "sqlite3mc")]
 const MEM_VFS: &str = "multipleciphers-memvfs";
 
-fn uri(filename: &str, persist: bool) -> String {
-    format!(
-        "file:{}?vfs={}",
-        filename,
-        if persist { OPFS_VFS } else { MEM_VFS }
-    )
+fn uri(options: &OpenOptions) -> String {
+    let vfs = if options.persist { OPFS_VFS } else { MEM_VFS };
+    format!("file:{}?vfs={vfs}", options.filename)
 }
-
-struct FSUtil {
-    mem: MemVfsUtil,
-    opfs: OnceCell<OpfsSAHPoolUtil>,
-}
-
-unsafe impl Send for FSUtil {}
-unsafe impl Sync for FSUtil {}
 
 struct SQLiteWorker {
-    open_options: OpenOptions,
-    state: SQLiteState,
+    options: Option<OpenOptions>,
+    db: Option<SQLiteDb>,
+    memory: MemVfsUtil,
+    opfs: Option<OpfsSAHPoolUtil>,
 }
 
-enum SQLiteState {
-    NotOpened,
-    Opened(Arc<SQLiteDb>),
-}
-
-async fn with_worker<F, T>(mut f: F) -> Result<T>
-where
-    F: FnMut(&mut SQLiteWorker) -> Result<T>,
-{
-    f(DB.lock().await.as_mut().ok_or(WorkerError::NotOpened)?)
-}
-
-async fn init_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
-    FS_UTIL
-        .opfs
-        .get_or_try_init(|| async {
-            sqlite_wasm_vfs::sahpool::install::<WasmOsCallback>(
-                &OpfsSAHPoolCfgBuilder::new()
-                    .directory(OPFS_VFS_DIR)
-                    .vfs_name("opfs")
-                    .build(),
-                false,
-            )
-            .await
-            .map_err(|_| WorkerError::OpfsSAHPoolOpened)
-        })
-        .await
-}
-
-fn get_opfs_util() -> Result<&'static OpfsSAHPoolUtil> {
-    FS_UTIL.opfs.get().ok_or(WorkerError::Unexpected)
-}
-
-async fn download_db() -> Result<DownloadDbResponse> {
-    with_worker(|worker| {
-        if let SQLiteState::Opened(db) = &worker.state {
-            if !db.is_autocommit() {
-                return Err(WorkerError::DownloadDb(
-                    "Commit or roll back the current transaction before downloading".into(),
-                ));
-            }
+impl SQLiteWorker {
+    fn new() -> Self {
+        Self {
+            options: None,
+            db: None,
+            // This worker serializes all access to the SQLite VFS.
+            memory: unsafe { MemVfsUtil::get().expect("Failed to initialize memory VFS") },
+            opfs: None,
         }
-        // VFS transfers require a closed database. Reopen even if export fails.
-        let was_open = matches!(worker.state, SQLiteState::Opened(_));
-        drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
-        let filename = &worker.open_options.filename;
-        let db = if worker.open_options.persist {
-            get_opfs_util()?
-                .export_db(filename)
-                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))
-        } else {
-            let mem_vfs = &FS_UTIL.mem;
-            mem_vfs
-                .export_db(filename)
-                .map_err(|err| WorkerError::DownloadDb(format!("{err}")))
-        };
-        if was_open {
-            worker.state =
-                SQLiteState::Opened(SQLiteDb::open(&uri(filename, worker.open_options.persist))?);
+    }
+
+    async fn open(&mut self, options: OpenOptions) -> Result<()> {
+        self.db = None;
+        self.options = None;
+        if options.persist && self.opfs.is_none() {
+            self.opfs = Some(
+                sqlite_wasm_vfs::sahpool::install::<WasmOsCallback>(
+                    &OpfsSAHPoolCfgBuilder::new()
+                        .directory(OPFS_VFS_DIR)
+                        .vfs_name("opfs")
+                        .build(),
+                    false,
+                )
+                .await
+                .map_err(|_| WorkerError::OpfsSAHPoolOpened)?,
+            );
         }
-        Ok(DownloadDbResponse {
-            filename: worker.open_options.filename.clone(),
-            data: Uint8Array::new_from_slice(&db?),
-        })
-    })
-    .await
-}
-
-async fn load_db(options: LoadDbOptions) -> Result<()> {
-    let db = options.data.to_vec();
-
-    #[cfg(feature = "sqlite3")]
-    validate_import_db(&db).map_err(|err| WorkerError::LoadDb(format!("{err}")))?;
-
-    with_worker(|worker| {
-        drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
-
-        let filename = &worker.open_options.filename;
-        if worker.open_options.persist {
-            let opfs = get_opfs_util()?;
-            opfs.remove(filename).map_err(|_| WorkerError::Unexpected)?;
-
-            if let Err(err) = import_db(opfs, filename, &db) {
-                return Err(WorkerError::LoadDb(format!("{err}")));
-            }
-        } else {
-            let mem_vfs = &FS_UTIL.mem;
-            mem_vfs.remove(filename).unwrap();
-            if let Err(err) = import_db(mem_vfs, filename, &db) {
-                return Err(WorkerError::LoadDb(format!("{err}")));
-            }
-        }
-
-        worker.state = SQLiteState::Opened(SQLiteDb::open(&uri(
-            &worker.open_options.filename,
-            worker.open_options.persist,
-        ))?);
+        self.db = Some(SQLiteDb::open(&uri(&options))?);
+        self.options = Some(options);
         Ok(())
-    })
-    .await
+    }
+
+    fn reopen(&mut self) -> Result<()> {
+        let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        self.db = Some(SQLiteDb::open(&uri(options))?);
+        Ok(())
+    }
+
+    fn remove_db(&self) -> Result<()> {
+        let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        if options.persist {
+            self.opfs
+                .as_ref()
+                .unwrap()
+                .remove(&options.filename)
+                .map_err(|_| WorkerError::Unexpected)?;
+        } else {
+            self.memory.remove(&options.filename).unwrap();
+        }
+        Ok(())
+    }
+
+    fn run(&mut self, options: RunOptions) -> Result<SQLiteRunResult> {
+        if options.clear_on_prepare {
+            self.db = None;
+            self.remove_db()?;
+            self.reopen()?;
+        }
+        let db = self.db.as_ref().ok_or(WorkerError::InvalidState)?;
+        let result = db.prepare(&options.sql)?.results()?;
+        Ok(SQLiteRunResult {
+            embed: options.embed,
+            result,
+        })
+    }
+
+    fn load_db(&mut self, data: LoadDbOptions) -> Result<()> {
+        let data = data.data.to_vec();
+        #[cfg(not(feature = "sqlite3mc"))]
+        validate_import_db(&data).map_err(|err| WorkerError::LoadDb(err.to_string()))?;
+
+        self.db = None;
+        self.remove_db()?;
+        let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        let result = if options.persist {
+            import_db(self.opfs.as_ref().unwrap(), &options.filename, &data)
+                .map_err(|err| WorkerError::LoadDb(err.to_string()))
+        } else {
+            import_db(&self.memory, &options.filename, &data)
+                .map_err(|err| WorkerError::LoadDb(err.to_string()))
+        };
+        // Keep the worker usable even if an import fails after validation.
+        self.reopen()?;
+        result
+    }
+
+    fn download_db(&mut self) -> Result<DownloadDbResponse> {
+        if let Some(db) = &self.db
+            && !db.is_autocommit()
+        {
+            return Err(WorkerError::DownloadDb(
+                "Commit or roll back the current transaction before downloading".into(),
+            ));
+        }
+        // VFS transfers require a closed database.
+        self.db = None;
+        let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        let filename = options.filename.clone();
+        let data = if options.persist {
+            self.opfs
+                .as_ref()
+                .unwrap()
+                .export_db(&filename)
+                .map_err(|err| WorkerError::DownloadDb(err.to_string()))
+        } else {
+            self.memory
+                .export_db(&filename)
+                .map_err(|err| WorkerError::DownloadDb(err.to_string()))
+        };
+        self.reopen()?;
+        Ok(DownloadDbResponse {
+            filename,
+            data: Uint8Array::new_from_slice(&data?),
+        })
+    }
 }
 
 fn import_db<T: DbTransfer>(
@@ -172,25 +168,23 @@ fn import_db<T: DbTransfer>(
     filename: &str,
     db: &[u8],
 ) -> std::result::Result<(), T::Error> {
-    #[cfg(feature = "sqlite3")]
+    #[cfg(not(feature = "sqlite3mc"))]
     {
         vfs.import_db(filename, db)
     }
-
     #[cfg(feature = "sqlite3mc")]
     {
         vfs.import_db_unchecked(filename, db)
     }
 }
 
-#[cfg(feature = "sqlite3")]
+#[cfg(not(feature = "sqlite3mc"))]
 fn validate_import_db(
     db: &[u8],
 ) -> std::result::Result<(), sqlite_wasm_rs::vfs::transfer::ImportDbError> {
     use sqlite_wasm_rs::vfs::transfer::ImportDbError;
 
-    // Validate before removing the current database. The checked transfer also
-    // validates, but only after we have freed the destination filename.
+    // Validate before replacing the current database.
     if db.len() < 512 || db.len() % 512 != 0 {
         return Err(ImportDbError::InvalidDbSize);
     }
@@ -212,89 +206,45 @@ fn validate_import_db(
     Ok(())
 }
 
-async fn open(options: OpenOptions) -> Result<()> {
-    let mut locker = DB.lock().await;
-    locker.take();
-
-    if options.persist {
-        init_opfs_util().await?;
-    }
-
-    let state = SQLiteState::Opened(SQLiteDb::open(&uri(&options.filename, options.persist))?);
-    let worker = SQLiteWorker {
-        open_options: options,
-        state,
-    };
-    *locker = Some(worker);
-    Ok(())
-}
-
-async fn run(options: RunOptions) -> Result<SQLiteRunResult> {
-    with_worker(|worker| {
-        if options.clear_on_prepare {
-            drop(std::mem::replace(&mut worker.state, SQLiteState::NotOpened));
-
-            let filename = &worker.open_options.filename;
-            if worker.open_options.persist {
-                get_opfs_util()?
-                    .remove(filename)
-                    .map_err(|_| WorkerError::Unexpected)?;
-            } else {
-                let mem_vfs = &FS_UTIL.mem;
-                mem_vfs.remove(filename).unwrap();
-            }
-
-            worker.state = SQLiteState::Opened(SQLiteDb::open(&uri(
-                &worker.open_options.filename,
-                worker.open_options.persist,
-            ))?);
-        }
-        match &worker.state {
-            SQLiteState::NotOpened => Err(WorkerError::InvaildState),
-            SQLiteState::Opened(sqlite_db) => {
-                let stmts = sqlite_db.prepare(&options.sql)?;
-                let result = stmts.stmts_result()?;
-                Ok(SQLiteRunResult {
-                    embed: options.embed,
-                    result,
-                })
-            }
-        }
-    })
-    .await
-}
-
-async fn execute_task(scope: DedicatedWorkerGlobalScope, mut rx: UnboundedReceiver<JsValue>) {
-    while let Some(request) = rx.recv().await {
-        let request = serde_wasm_bindgen::from_value::<WorkerRequest>(request).unwrap();
-        let resp = match request {
-            WorkerRequest::Open(options) => WorkerResponse::Open(open(options).await),
-            WorkerRequest::Run(options) => WorkerResponse::Run(run(options).await),
-            WorkerRequest::LoadDb(options) => WorkerResponse::LoadDb(load_db(options).await),
-            WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(download_db().await),
+async fn execute_tasks(
+    scope: DedicatedWorkerGlobalScope,
+    mut requests: mpsc::UnboundedReceiver<WorkerRequest>,
+) {
+    let mut worker = SQLiteWorker::new();
+    post_response(&scope, WorkerResponse::Ready);
+    while let Some(request) = requests.recv().await {
+        let response = match request {
+            WorkerRequest::Open(options) => WorkerResponse::Open(worker.open(options).await),
+            WorkerRequest::Run(options) => WorkerResponse::Run(worker.run(options)),
+            WorkerRequest::LoadDb(options) => WorkerResponse::LoadDb(worker.load_db(options)),
+            WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(worker.download_db()),
         };
-        if let Err(err) = scope.post_message(&serde_wasm_bindgen::to_value(&resp).unwrap()) {
-            log::error!("Failed to send task to window: {resp:?}, {err:?}");
-        }
+        post_response(&scope, response);
+    }
+}
+
+fn post_response(scope: &DedicatedWorkerGlobalScope, response: WorkerResponse) {
+    let message = serde_wasm_bindgen::to_value(&response).unwrap();
+    if let Err(err) = scope.post_message(&message) {
+        log::error!("Failed to send worker response: {err:?}");
     }
 }
 
 pub fn entry() {
     console_error_panic_hook::set_once();
     console_log::init_with_level(log::Level::Debug).unwrap();
-
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<JsValue>();
-
-    let scope: DedicatedWorkerGlobalScope = JsValue::from(js_sys::global()).into();
-    spawn_local(execute_task(scope.clone(), rx));
-
-    let on_message = Closure::<dyn Fn(MessageEvent)>::new(move |ev: MessageEvent| {
-        tx.send(ev.data()).unwrap();
+    let scope = js_sys::global().unchecked_into::<DedicatedWorkerGlobalScope>();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+        match serde_wasm_bindgen::from_value(event.data()) {
+            Ok(request) => {
+                let _ = tx.send(request);
+            }
+            Err(err) => log::error!("Invalid worker request: {err}"),
+        }
     });
-
     scope.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-    scope
-        .post_message(&serde_wasm_bindgen::to_value(&WorkerResponse::Ready).unwrap())
-        .expect("Faild to send ready to window");
+    // The dedicated worker owns this callback for its entire lifetime.
     on_message.forget();
+    spawn_local(execute_tasks(scope, rx));
 }

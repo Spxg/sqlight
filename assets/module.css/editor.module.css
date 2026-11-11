@@ -12,7 +12,7 @@
   /* http://code.stephenmorley.org/html-and-css/fixing-browsers-broken-monospace-font-handling/
    * ACE uses Monaco, Menlo, "Ubuntu Mono", Consolas, source-code-pro, monospace;
    */
-  font-family: 'Source Code Pro', monospace;
+  font-family: 'Source Code Pro Variable', monospace;
   font-optical-sizing: auto;
 }
 
@@ -28,15 +28,4 @@
 
 .ace {
   composes: -advanced;
-}
-
-.monaco {
-  composes: -advanced;
-}
-
-.simple {
-  composes: -advanced;
-  border: none;
-  color: inherit;
-  background-color: inherit;
 }

@@ -10,7 +10,7 @@ pub fn ContextMenu() -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
 
     view! {
-        <MenuGroup title="Choose whether to keep the context".into()>
+        <MenuGroup title="Database context".into()>
             <SelectOne
                 name="Drop Context".into()
                 current_value=move || { *state.keep_ctx().read() }
@@ -19,7 +19,7 @@ pub fn ContextMenu() -> impl IntoView {
                     state.keep_ctx().set(false);
                 }
             >
-                "Each execution is in a new DB."
+                "Start each run with an empty database."
             </SelectOne>
             <SelectOne
                 name="Keep Context".into()
@@ -29,7 +29,7 @@ pub fn ContextMenu() -> impl IntoView {
                     state.keep_ctx().set(true);
                 }
             >
-                "Keep the results of each execution."
+                "Keep tables and data between runs."
             </SelectOne>
         </MenuGroup>
     }

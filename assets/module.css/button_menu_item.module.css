@@ -18,6 +18,9 @@
 
 .container {
   composes: -menuItemFullButton;
+  display: block;
+  cursor: pointer;
+  text-decoration: none;
 
   &:hover {
     color: var(--header-tint);
@@ -30,9 +33,15 @@
 
 .name {
   composes: -menuItemTitle;
+  display: block;
   margin: 0;
 }
 
 .description {
+  display: block;
   margin: 0;
+}
+
+.container:disabled {
+  opacity: 0.5;
 }

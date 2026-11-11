@@ -13,7 +13,7 @@ pub fn Section(label: String, children: Children) -> impl IntoView {
     view! {
         <div>
             <Header label=label />
-            <p>{children()}</p>
+            <div class=styles::code>{children()}</div>
         </div>
     }
 }

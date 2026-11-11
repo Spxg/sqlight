@@ -1,16 +1,14 @@
-use std::ops::Deref;
+use std::time::Duration;
 
 use istyles::istyles;
 use leptos::prelude::*;
-use leptos::tachys::html;
 use prettytable::{Cell, Row, Table};
 use reactive_stores::Store;
 use split_grid::{Gutter, SplitOptions};
 use wasm_bindgen::{JsCast, prelude::Closure};
-use web_sys::wasm_bindgen::JsValue;
 
 use crate::{
-    SQLightError, SQLiteStatementResult,
+    SQLightError, SQLiteStatementResult, SendWrapper,
     app::{
         Focus,
         editor::Editor,
@@ -22,114 +20,139 @@ use crate::{
 
 istyles!(styles, "assets/module.postcss/playground.module.css.map");
 
+#[derive(Clone, Copy)]
+pub(super) struct ResolvedTheme(pub Memo<Theme>);
+
 #[component]
 pub fn Playground() -> impl IntoView {
-    let state = GlobalState::load().unwrap_or_default();
-    provide_context(Store::new(state));
+    let state = Store::new(GlobalState::load().unwrap_or_default());
+    provide_context(state);
 
-    let state = expect_context::<Store<GlobalState>>();
+    let prefers_dark = media_query("(prefers-color-scheme: dark)");
+    let narrow_screen = media_query("(max-width: 1600px)");
+    let theme = Memo::new(move |_| state.theme().get().resolve(prefers_dark.get()));
+    let orientation = Memo::new(move |_| state.orientation().get().resolve(narrow_screen.get()));
+    provide_context(ResolvedTheme(theme));
 
-    handle_last_error(state);
-    handle_system_theme(state);
-    handle_automic_orientation(state);
+    handle_system_theme(theme);
+    handle_status(state);
     handle_save_state(state);
-    handle_import_progress(state);
-    handle_ace_config(state);
+    handle_ace_config(state, theme);
     handle_embed_query_result(state);
 
     view! {
         <div id="playground" class=styles::container>
             <Header />
-            <ResizableArea />
+            <ResizableArea orientation=orientation />
         </div>
     }
-    .into_any()
+}
+
+fn media_query(query: &str) -> RwSignal<bool> {
+    let query = window().match_media(query).unwrap();
+    let matches = RwSignal::new(query.as_ref().is_some_and(|query| query.matches()));
+
+    if let Some(query) = query {
+        let observed_query = query.clone();
+        let callback = Closure::<dyn Fn()>::new(move || matches.set(observed_query.matches()));
+        query
+            .add_event_listener_with_callback("change", callback.as_ref().unchecked_ref())
+            .unwrap();
+
+        let query = SendWrapper::new(query);
+        let callback = SendWrapper::new(callback);
+        on_cleanup(move || {
+            query
+                .remove_event_listener_with_callback("change", callback.as_ref().unchecked_ref())
+                .unwrap();
+        });
+    }
+
+    matches
 }
 
 fn handle_embed_query_result(state: Store<GlobalState>) {
-    const MARK: &str = "-- R:";
-
     Effect::new(move || {
-        let mut sqls = vec![];
-
-        for result in &*state.embed().read() {
-            let mut table_s = Table::new();
-
-            match result {
-                SQLiteStatementResult::Finish => continue,
-                SQLiteStatementResult::Step(table) => {
-                    let sql = table.sql.trim().to_string();
-
-                    let sql = if let Some(values) = &table.values {
-                        table_s.add_row(Row::new(
-                            values.columns.iter().map(|s| Cell::new(s)).collect(),
-                        ));
-                        for row in &values.rows {
-                            table_s.add_row(Row::new(row.iter().map(|s| Cell::new(s)).collect()));
-                        }
-
-                        let mut result = table_s
-                            .to_string()
-                            .lines()
-                            .map(|x| format!("{MARK} {x}"))
-                            .collect::<Vec<String>>()
-                            .join("\n");
-
-                        result.push('\n');
-
-                        let sql = sql
-                            .lines()
-                            .filter(|s| !s.starts_with(MARK))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        result.push_str(&sql);
-
-                        result
-                    } else {
-                        sql
-                    };
-
-                    sqls.push(sql);
-                }
-            }
-        }
+        let sqls = state.embed().with(|results| {
+            results
+                .iter()
+                .filter_map(embedded_result)
+                .collect::<Vec<_>>()
+        });
 
         if !sqls.is_empty() {
-            if let Some(editor) = &*state.editor().read_untracked() {
-                editor.set_value(sqls.join("\n\n"));
-            }
+            state.editor().with_untracked(|editor| {
+                if let Some(editor) = editor {
+                    editor.set_value(sqls.join("\n\n"));
+                }
+            });
         }
     });
 }
 
-fn handle_ace_config(state: Store<GlobalState>) {
+fn embedded_result(result: &SQLiteStatementResult) -> Option<String> {
+    const MARK: &str = "-- R:";
+
+    let SQLiteStatementResult::Step(table) = result else {
+        return None;
+    };
+    let sql = table.sql.trim();
+    let Some(values) = &table.values else {
+        return Some(sql.to_owned());
+    };
+
+    let mut rendered = Table::new();
+    rendered.add_row(Row::new(
+        values
+            .columns
+            .iter()
+            .map(|column| Cell::new(column))
+            .collect(),
+    ));
+    for row in &values.rows {
+        rendered.add_row(Row::new(row.iter().map(|value| Cell::new(value)).collect()));
+    }
+
+    let mut result = String::new();
+    for line in rendered.to_string().lines() {
+        result.push_str(MARK);
+        result.push(' ');
+        result.push_str(line);
+        result.push('\n');
+    }
+    result.push_str(
+        &sql.lines()
+            .filter(|line| !line.starts_with(MARK))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    Some(result)
+}
+
+fn handle_ace_config(state: Store<GlobalState>, theme: Memo<Theme>) {
     Effect::new(move || {
-        let config = state.editor_config().read();
-        let keyboard = &config.keyboard;
-        let theme = match state.theme().read().value() {
-            Theme::SystemLight | Theme::Light => &config.light_theme,
-            Theme::SystemDark | Theme::Dark => &config.dark_theme,
-            Theme::System => unreachable!(),
-        };
+        let theme = theme.get();
+        let (keyboard, theme) = state.editor_config().with(|config| {
+            let keyboard =
+                (config.keyboard != "ace").then(|| format!("ace/keyboard/{}", config.keyboard));
+            let theme = match theme {
+                Theme::Light => &config.light_theme,
+                Theme::Dark => &config.dark_theme,
+                Theme::System => unreachable!(),
+            };
+            (keyboard, format!("ace/theme/{theme}"))
+        });
+        let result = state.editor().with(|editor| {
+            editor.as_ref().map(|editor| {
+                editor.set_keyboard_handler(keyboard.as_deref())?;
+                editor.set_theme(&theme)
+            })
+        });
 
-        if let Some(Err(err)) = state.editor().read().as_ref().map(|editor| {
-            let handler = (keyboard != "ace").then_some(format!("ace/keyboard/{keyboard}"));
-            editor.set_keyboard_handler(handler.as_deref())
-        }) {
+        if let Some(Err(error)) = result {
             state
                 .last_error()
-                .set(Some(SQLightError::new_ace_editor(err)));
-        }
-
-        if let Some(Err(err)) = state
-            .editor()
-            .read()
-            .as_ref()
-            .map(|editor| editor.set_theme(&format!("ace/theme/{theme}")))
-        {
-            state
-                .last_error()
-                .set(Some(SQLightError::new_ace_editor(err)));
+                .set(Some(SQLightError::new_ace_editor(error)));
         }
     });
 }
@@ -145,19 +168,32 @@ fn handle_save_state(state: Store<GlobalState>) {
         state.run_selected_sql().track();
         state.multiple_ciphers().track();
 
-        state.read_untracked().save();
+        let timeout = set_timeout_with_handle(
+            move || state.read_untracked().save(),
+            Duration::from_millis(300),
+        )
+        .unwrap();
+        on_cleanup(move || timeout.clear());
+    });
+
+    let callback = Closure::<dyn Fn()>::new(move || state.read_untracked().save());
+    window()
+        .add_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref())
+        .unwrap();
+    let callback = SendWrapper::new(callback);
+    on_cleanup(move || {
+        window()
+            .remove_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref())
+            .unwrap();
     });
 }
 
-fn handle_last_error(state: Store<GlobalState>) {
+fn handle_status(state: Store<GlobalState>) {
     Effect::new(move || {
         if state.last_error().read().is_some() {
             change_focus(state, Some(Focus::Status));
         }
     });
-}
-
-fn handle_import_progress(state: Store<GlobalState>) {
     Effect::new(move || {
         if state.import_progress().read().is_some() {
             change_focus(state, Some(Focus::Status));
@@ -165,172 +201,96 @@ fn handle_import_progress(state: Store<GlobalState>) {
     });
 }
 
-fn handle_system_theme(state: Store<GlobalState>) {
+fn handle_system_theme(theme: Memo<Theme>) {
     Effect::new(move || {
-        let theme = match state.theme().read().value() {
-            Theme::SystemLight | Theme::Light => "light",
-            Theme::SystemDark | Theme::Dark => "dark",
+        let theme = match theme.get() {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
             Theme::System => unreachable!(),
         };
         if let Some(element) = document().document_element() {
-            element.set_attribute("data-theme", theme).unwrap()
+            element.set_attribute("data-theme", theme).unwrap();
         }
     });
-
-    if let Some(query) = Theme::match_media() {
-        let f = move |query: web_sys::MediaQueryList| {
-            if state.theme().get_untracked().is_system() {
-                state.theme().set(if query.matches() {
-                    Theme::SystemDark
-                } else {
-                    Theme::SystemLight
-                });
-            }
-        };
-        let callback = Closure::<dyn Fn(web_sys::MediaQueryList)>::new(f);
-        query
-            .add_event_listener_with_callback("change", callback.as_ref().unchecked_ref())
-            .unwrap();
-        callback.forget();
-    }
-}
-
-fn handle_automic_orientation(state: Store<GlobalState>) {
-    let auto_change = move |query: web_sys::MediaQueryList| {
-        if state.orientation().read().is_auto() {
-            let value = if query.matches() {
-                Orientation::AutoHorizontal
-            } else {
-                Orientation::AutoVertical
-            };
-            state
-                .orientation()
-                .maybe_update(|orientation| std::mem::replace(orientation, value) != value);
-        }
-    };
-
-    Effect::new(move || {
-        if let Some(query) = Orientation::match_media() {
-            auto_change(query);
-        }
-    });
-
-    if let Some(query) = Orientation::match_media() {
-        let callback = Closure::<dyn Fn(web_sys::MediaQueryList)>::new(auto_change);
-        query
-            .add_event_listener_with_callback("change", callback.as_ref().unchecked_ref())
-            .unwrap();
-        callback.forget();
-    }
-}
-
-fn gird_style() -> String {
-    let state = expect_context::<Store<GlobalState>>();
-
-    let (focused_grid_style, unfocused_grid_style) = match state.orientation().read().value() {
-        Orientation::Horizontal | Orientation::AutoHorizontal => (
-            styles::resizeableAreaRowOutputFocused.to_string(),
-            styles::resizeableAreaRowOutputUnfocused.to_string(),
-        ),
-        Orientation::Vertical | Orientation::AutoVertical => (
-            styles::resizeableAreaColumnOutputFocused.to_string(),
-            styles::resizeableAreaColumnOutputUnfocused.to_string(),
-        ),
-        Orientation::Automatic => unreachable!(),
-    };
-
-    if state.read().is_focus() {
-        focused_grid_style
-    } else {
-        unfocused_grid_style
-    }
-}
-
-fn handle_outer_style() -> String {
-    let state = expect_context::<Store<GlobalState>>();
-
-    match state.orientation().read().value() {
-        Orientation::Horizontal | Orientation::AutoHorizontal => {
-            styles::splitRowsGutter.to_string()
-        }
-        Orientation::Vertical | Orientation::AutoVertical => styles::splitColumnsGutter.to_string(),
-        Orientation::Automatic => unreachable!(),
-    }
-}
-
-fn handle_inner_style() -> String {
-    let state = expect_context::<Store<GlobalState>>();
-
-    match state.orientation().read().value() {
-        Orientation::Horizontal | Orientation::AutoHorizontal => {
-            styles::splitRowsGutterHandle.to_string()
-        }
-        Orientation::Vertical | Orientation::AutoVertical => String::new(),
-        Orientation::Automatic => unreachable!(),
-    }
 }
 
 #[component]
-fn ResizableArea() -> impl IntoView {
+fn ResizableArea(orientation: Memo<Orientation>) -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
-
-    let node_ref = NodeRef::<html::element::Div>::new();
-    let drag_handle = NodeRef::<html::element::Div>::new();
-
-    Effect::new(move || {
-        state.orientation().track();
-        state.is_focused().track();
-
-        if let Some(div) = &*node_ref.read() {
-            let style = div.deref().style();
-            let _ = style.remove_property("grid-template-columns");
-            let _ = style.remove_property("grid-template-rows");
-        }
-    });
+    let focused = Memo::new(move |_| state.focus().get().is_some());
+    let node_ref = NodeRef::<leptos::html::Div>::new();
+    let drag_handle = NodeRef::<leptos::html::Div>::new();
 
     Effect::new(move || {
-        state.show_something().track();
-
-        let element = if let Some(element) = &*drag_handle.read() {
-            JsValue::from(element)
-        } else {
-            JsValue::null()
+        let orientation = orientation.get();
+        let focused = focused.get();
+        let Some(container) = node_ref.get() else {
+            return;
         };
+        let style = web_sys::HtmlElement::style(&container);
+        style.remove_property("grid-template-columns").unwrap();
+        style.remove_property("grid-template-rows").unwrap();
 
-        let options = match state.orientation().read().value() {
-            Orientation::Horizontal | Orientation::AutoHorizontal => SplitOptions {
+        if !focused {
+            return;
+        }
+        let Some(handle) = drag_handle.get() else {
+            return;
+        };
+        let gutter = Gutter {
+            track: 1,
+            element: handle.into(),
+        };
+        let options = match orientation {
+            Orientation::Horizontal => SplitOptions {
                 min_size: 100,
-                row_gutters: Some(vec![Gutter { track: 1, element }]),
+                row_gutters: Some(vec![gutter]),
                 column_gutters: None,
             },
-            Orientation::Vertical | Orientation::AutoVertical => SplitOptions {
+            Orientation::Vertical => SplitOptions {
                 min_size: 100,
                 row_gutters: None,
-                column_gutters: Some(vec![Gutter { track: 1, element }]),
+                column_gutters: Some(vec![gutter]),
             },
-
             Orientation::Automatic => unreachable!(),
         };
-        let grid = split_grid::split(&options.into());
+        let grid = SendWrapper::new(split_grid::split(&options.into()));
         on_cleanup(move || grid.destroy());
     });
 
+    let grid_class = move || match (orientation.get(), focused.get()) {
+        (Orientation::Horizontal, true) => styles::resizeableAreaRowOutputFocused,
+        (Orientation::Horizontal, false) => styles::resizeableAreaRowOutputUnfocused,
+        (Orientation::Vertical, true) => styles::resizeableAreaColumnOutputFocused,
+        (Orientation::Vertical, false) => styles::resizeableAreaColumnOutputUnfocused,
+        (Orientation::Automatic, _) => unreachable!(),
+    };
+    let gutter_class = move || match orientation.get() {
+        Orientation::Horizontal => styles::splitRowsGutter,
+        Orientation::Vertical => styles::splitColumnsGutter,
+        Orientation::Automatic => unreachable!(),
+    };
+    let handle_class = move || match orientation.get() {
+        Orientation::Horizontal => styles::splitRowsGutterHandle,
+        Orientation::Vertical => "",
+        Orientation::Automatic => unreachable!(),
+    };
+
     view! {
-        <div node_ref=node_ref class=gird_style>
+        <div node_ref=node_ref class=grid_class>
             <div class=styles::editor>
                 <Editor />
             </div>
-            <Show when=move || state.read().is_focus() fallback=|| ()>
-                <div node_ref=drag_handle class=handle_outer_style>
-                    <span class=handle_inner_style>"⣿"</span>
+            <Show when=move || focused.get()>
+                <div node_ref=drag_handle class=gutter_class>
+                    <span class=handle_class>"⣿"</span>
                 </div>
             </Show>
-            <Show when=move || *state.show_something().read() fallback=|| ()>
+            <Show when=move || state.show_something().get()>
                 <div class=styles::output>
                     <Output />
                 </div>
             </Show>
-
         </div>
     }
 }

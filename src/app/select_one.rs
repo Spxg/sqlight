@@ -11,9 +11,9 @@ pub fn SelectOne<T, C, CH>(
     children: Children,
 ) -> impl IntoView
 where
-    C: Fn() -> T + Send + 'static,
+    C: Fn() -> T + Send + Sync + 'static,
     CH: FnMut() + Send + 'static,
-    T: PartialEq + Eq + Send + 'static,
+    T: PartialEq + Eq + Send + Sync + 'static,
 {
     view! {
         <SelectableMenuItem

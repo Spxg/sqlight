@@ -10,16 +10,52 @@ istyles!(
 );
 
 #[component]
-pub fn ButtonMenuItem<C>(name: String, on_click: C, children: Children) -> impl IntoView
+pub fn ButtonMenuItem<C>(
+    name: String,
+    #[prop(optional, into)] disabled: Signal<bool>,
+    on_click: C,
+    children: Children,
+) -> impl IntoView
 where
     C: Fn(MouseEvent) + Send + 'static,
 {
     view! {
         <MenuItem>
-            <button class=styles::container on:click=on_click>
-                <div class=styles::name>{name}</div>
-                <div class=styles::description>{children()}</div>
+            <button
+                type="button"
+                class=styles::container
+                disabled=move || disabled.get()
+                on:click=on_click
+            >
+                <span class=styles::name>{name}</span>
+                <span class=styles::description>{children()}</span>
             </button>
+        </MenuItem>
+    }
+}
+
+#[component]
+pub fn LinkMenuItem<C>(
+    name: String,
+    href: &'static str,
+    on_click: C,
+    children: Children,
+) -> impl IntoView
+where
+    C: Fn(MouseEvent) + Send + 'static,
+{
+    view! {
+        <MenuItem>
+            <a
+                class=styles::container
+                href=href
+                target="_blank"
+                rel="noopener noreferrer"
+                on:click=on_click
+            >
+                <span class=styles::name>{name}</span>
+                <span class=styles::description>{children()}</span>
+            </a>
         </MenuItem>
     }
 }

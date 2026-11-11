@@ -1,0 +1,7 @@
+[[hooks]]
+stage = "pre_build"
+command = "npm"
+command_arguments = ["run", "assets"]
+
+[watch]
+ignore = ["assets/generated", "assets/module.postcss", "node_modules"]

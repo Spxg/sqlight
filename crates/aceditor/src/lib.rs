@@ -1,22 +1,21 @@
-use js_sys::{Object, Reflect};
+use js_sys::Object;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 
 // <https://ajaxorg.github.io/ace-api-docs/index.html>
 mod bindgen {
-    use js_sys::Object;
+    use js_sys::{Function, Object};
     use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
     #[wasm_bindgen]
     extern "C" {
         #[wasm_bindgen(js_namespace = ace, js_name = edit, catch)]
         pub fn edit(element: &str, options: Option<Object>) -> Result<Editor, JsValue>;
-        #[wasm_bindgen(js_namespace = ace, js_name = require, catch)]
-        pub fn require(module: &str) -> Result<JsValue, JsValue>;
     }
 
     #[wasm_bindgen]
     extern "C" {
+        #[derive(Clone)]
         pub type Editor;
 
         #[wasm_bindgen(method, js_name = setTheme, catch)]
@@ -28,11 +27,23 @@ mod bindgen {
         #[wasm_bindgen(method, js_name = getValue)]
         pub fn get_value(this: &Editor) -> String;
 
-        #[wasm_bindgen(method, js_name = clearSelection)]
-        pub fn clear_selection(this: &Editor);
-
         #[wasm_bindgen(method, js_name = setValue)]
-        pub fn set_value(this: &Editor, value: String);
+        pub fn set_value(this: &Editor, value: &str, cursor_position: i32);
+
+        #[wasm_bindgen(method)]
+        pub fn on(this: &Editor, event: &str, callback: &Function);
+
+        #[wasm_bindgen(method)]
+        pub fn off(this: &Editor, event: &str, callback: &Function);
+
+        #[wasm_bindgen(method)]
+        pub fn destroy(this: &Editor);
+
+        #[wasm_bindgen(method)]
+        pub fn resize(this: &Editor);
+
+        #[wasm_bindgen(method, getter)]
+        pub fn commands(this: &Editor) -> CommandManager;
 
         #[wasm_bindgen(method, js_name = getSession)]
         pub fn get_session(this: &Editor) -> EditSession;
@@ -59,9 +70,6 @@ mod bindgen {
     extern "C" {
         pub type EditSession;
 
-        #[wasm_bindgen(method, js_name = setValue)]
-        pub fn set_value(this: &EditSession, value: String);
-
         #[wasm_bindgen(method, js_name = getLength)]
         pub fn get_length(this: &EditSession) -> usize;
 
@@ -71,6 +79,17 @@ mod bindgen {
         #[wasm_bindgen(method, js_name = getLine)]
         pub fn get_line(this: &EditSession, row: usize) -> String;
 
+    }
+
+    #[wasm_bindgen(inline_js = r#"
+export function defineVimWrite() {
+    const { CodeMirror } = ace.require("ace/keyboard/vim");
+    CodeMirror.Vim.defineEx("write", "w", cm => cm.ace.execCommand("executeCode"));
+}
+"#)]
+    extern "C" {
+        #[wasm_bindgen(js_name = defineVimWrite, catch)]
+        pub fn define_vim_write() -> Result<(), JsValue>;
     }
 
     #[wasm_bindgen]
@@ -85,7 +104,7 @@ mod bindgen {
 
 type Result<T> = std::result::Result<T, EditorError>;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct EditorOptionsBuilder(EditorOptions);
 
 impl EditorOptionsBuilder {
@@ -148,7 +167,7 @@ impl Default for EditorOptions {
         EditorOptions {
             mode: "ace/mode/text".into(),
             theme: "ace/theme/textmate".into(),
-            keyboard_handler: "ace/keyboard/ace".into(),
+            keyboard_handler: JsValue::null(),
             value: String::new(),
         }
     }
@@ -170,18 +189,18 @@ pub enum EditorError {
     SetTheme(JsValue),
     #[error("Failed to set keyboard handler")]
     SetKeyboardHandler(JsValue),
-    #[error("Failed to define extenstion")]
+    #[error("Failed to define Vim extension")]
     DefineEx(JsValue),
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Command {
-    pub name: String,
-    pub bind_key: BindKey,
+struct Command {
+    name: String,
+    bind_key: BindKey,
     #[serde(with = "serde_wasm_bindgen::preserve")]
-    pub exec: js_sys::Function,
-    pub read_only: bool,
+    exec: js_sys::Function,
+    read_only: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -192,18 +211,20 @@ pub struct BindKey {
 
 pub struct Editor {
     js: bindgen::Editor,
+    change_listener: Option<Closure<dyn Fn()>>,
+    command_callbacks: Vec<Closure<dyn Fn()>>,
 }
-
-unsafe impl Send for Editor {}
-
-unsafe impl Sync for Editor {}
 
 impl Editor {
     /// ace.edit
     pub fn open(element: &str, options: Option<&EditorOptions>) -> Result<Self> {
         let editor = bindgen::edit(element, options.map(|options| options.to_js()))
             .map_err(EditorError::Open)?;
-        Ok(Editor { js: editor })
+        Ok(Editor {
+            js: editor,
+            change_listener: None,
+            command_callbacks: Vec::new(),
+        })
     }
 
     pub fn set_theme(&self, theme: &str) -> Result<()> {
@@ -222,34 +243,39 @@ impl Editor {
             .map_err(EditorError::SetKeyboardHandler)
     }
 
-    pub fn define_vim_w(callback: Box<dyn Fn() + 'static>) -> Result<()> {
-        let value = bindgen::require("ace/keyboard/vim").map_err(EditorError::DefineEx)?;
-
-        let define_ex = Reflect::get(&value, &JsValue::from("CodeMirror"))
-            .and_then(|code_mirror| Reflect::get(&code_mirror, &JsValue::from("Vim")))
-            .and_then(|vim| Reflect::get(&vim, &JsValue::from("defineEx")))
-            .map_err(EditorError::DefineEx)?;
-        let callback = Closure::wrap(callback);
-
-        js_sys::Function::from(define_ex)
-            .call3(
-                &JsValue::null(),
-                &JsValue::from("write"),
-                &JsValue::from("w"),
-                callback.as_ref().unchecked_ref(),
-            )
-            .map_err(EditorError::DefineEx)?;
-        callback.forget();
-
-        Ok(())
+    pub fn define_vim_w() -> Result<()> {
+        bindgen::define_vim_write().map_err(EditorError::DefineEx)
     }
 
-    pub fn add_command(&self, command: Command) {
+    pub fn add_command(&mut self, name: &str, bind_key: BindKey, callback: impl Fn() + 'static) {
+        let callback = Closure::<dyn Fn()>::new(callback);
+        let command = Command {
+            name: name.into(),
+            bind_key,
+            exec: callback
+                .as_ref()
+                .unchecked_ref::<js_sys::Function>()
+                .clone(),
+            read_only: true,
+        };
+        self.js
+            .commands()
+            .add_command(serde_wasm_bindgen::to_value(&command).unwrap());
+        self.command_callbacks.push(callback);
+    }
+
+    pub fn on_change(&mut self, callback: impl Fn(String) + 'static) {
+        if let Some(listener) = self.change_listener.take() {
+            self.js.off("change", listener.as_ref().unchecked_ref());
+        }
         let editor = self.js.clone();
-        let manager = bindgen::CommandManager::from(
-            Reflect::get(&editor, &JsValue::from("commands")).unwrap(),
-        );
-        manager.add_command(serde_wasm_bindgen::to_value(&command).unwrap());
+        let listener = Closure::<dyn Fn()>::new(move || callback(editor.get_value()));
+        self.js.on("change", listener.as_ref().unchecked_ref());
+        self.change_listener = Some(listener);
+    }
+
+    pub fn resize(&self) {
+        self.js.resize();
     }
 
     pub fn get_value(&self) -> String {
@@ -257,8 +283,7 @@ impl Editor {
     }
 
     pub fn set_value(&self, value: String) {
-        self.js.set_value(value);
-        self.js.clear_selection();
+        self.js.set_value(&value, -1);
     }
 
     pub fn get_range(&self) -> Range {
@@ -285,5 +310,14 @@ impl Editor {
         self.js
             .get_session()
             .get_text_range(serde_wasm_bindgen::to_value(&range).unwrap())
+    }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        if let Some(listener) = &self.change_listener {
+            self.js.off("change", listener.as_ref().unchecked_ref());
+        }
+        self.js.destroy();
     }
 }

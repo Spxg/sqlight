@@ -17,20 +17,24 @@ pub fn SelectableMenuItem<S, C>(
     children: Children,
 ) -> impl IntoView
 where
-    S: Fn() -> bool + Send + 'static,
+    S: Fn() -> bool + Send + Sync + 'static,
     C: FnMut(MouseEvent) + Send + 'static,
 {
+    let selected = Memo::new(move |_| selected());
+
     view! {
         <MenuItem>
             <button
-                class=move || { if selected() { styles::selected } else { styles::container } }
+                type="button"
+                class=move || { if selected.get() { styles::selected } else { styles::container } }
+                aria-pressed=move || selected.get().to_string()
                 on:click=on_click
             >
-                <div class=styles::header>
-                    <span class=styles::checkmark>{checkmark_icon()}</span>
+                <span class=styles::header>
+                    <span class=styles::checkmark aria-hidden="true">{checkmark_icon()}</span>
                     <span class=styles::name>{name}</span>
-                </div>
-                <div class=styles::description>{children()}</div>
+                </span>
+                <span class=styles::description>{children()}</span>
             </button>
         </MenuItem>
     }

@@ -1,6 +1,6 @@
 .container {
   padding: 0.75em 1em 0;
-  width: 27em;
+  width: min(27em, calc(100vw - 2em));
   line-height: normal;
 
   &:last-child {

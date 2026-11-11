@@ -12,26 +12,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22
-      - run: npm install
-      - run: npx postcss --dir assets/module.postcss assets/module.css --base assets/module.css
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
 
-      - name: List postcss
+      - name: Install Rust toolchain
         run: |
-          ls assets/module.postcss
+          rustup show
+          rustup target add wasm32-unknown-unknown
 
-      - uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall trunk
+      - uses: cargo-bins/cargo-binstall@v1.26.2
+      - run: cargo binstall --no-confirm --version 0.22.1 trunk
 
       - name: Build
-        run: trunk build --release
+        run: npm run build
 
       - name: Deploy
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@v4.1.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist

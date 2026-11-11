@@ -1,55 +1,60 @@
+use std::{collections::BTreeMap, path::PathBuf};
+
 use proc_macro::TokenStream;
 use quote::quote;
-use serde_json::Value;
 use syn::{LitStr, parse_macro_input};
 
 #[proc_macro]
 pub fn istyles(input: TokenStream) -> TokenStream {
-    let (css_module_map, mod_name) = parse_macro_input!(input with parse_input);
-
-    let value: Value = match serde_json::from_str(&css_module_map) {
-        Ok(v) => v,
-        Err(e) => {
-            return syn::Error::new_spanned(css_module_map, format!("Invalid JSON: {e}"))
-                .to_compile_error()
-                .into();
-        }
-    };
-
-    let consts = generate_consts(&value);
-    let expanded = quote! {
-        pub mod #mod_name {
-            #consts
-        }
-    };
-
-    TokenStream::from(expanded)
+    let (module, map) = parse_macro_input!(input with parse_input);
+    expand(module, map)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
-fn parse_input(input: syn::parse::ParseStream) -> syn::Result<(String, syn::Ident)> {
-    let mod_name: syn::Ident = input.parse()?;
+fn parse_input(input: syn::parse::ParseStream) -> syn::Result<(syn::Ident, LitStr)> {
+    let module = input.parse()?;
     input.parse::<syn::Token![,]>()?;
-    let path: LitStr = input.parse()?;
-    let path = path.value();
-    let json = std::fs::read_to_string(&path)
-        .map_err(|e| syn::Error::new_spanned(&path, format!("Failed to read JSON: {e:?}")))?;
-    Ok((json, mod_name))
+    let map = input.parse()?;
+    Ok((module, map))
 }
 
-fn generate_consts(value: &Value) -> proc_macro2::TokenStream {
-    match value {
-        Value::Object(map) => {
-            let const_decls = map.iter().map(|(k, v)| {
-                let key = k.replace('-', "_");
-                let key_ident = syn::Ident::new(&key, proc_macro2::Span::call_site());
-                let value_str = v.as_str().unwrap_or_default();
+fn expand(module: syn::Ident, map: LitStr) -> syn::Result<proc_macro2::TokenStream> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .map_err(|error| syn::Error::new_spanned(&map, error))?;
+    let path = PathBuf::from(manifest_dir).join(map.value());
+    let source = std::fs::read_to_string(&path).map_err(|error| {
+        syn::Error::new_spanned(
+            &map,
+            format!(
+                "cannot read CSS module map {}: {error}; run `npm run assets` first",
+                path.display()
+            ),
+        )
+    })?;
+    let classes: BTreeMap<String, String> = serde_json::from_str(&source).map_err(|error| {
+        syn::Error::new_spanned(&map, format!("invalid CSS module map: {error}"))
+    })?;
+    let constants = classes
+        .into_iter()
+        .map(|(class, value)| {
+            let name = syn::parse_str::<syn::Ident>(&class.replace('-', "_")).map_err(|_| {
+                syn::Error::new_spanned(
+                    &map,
+                    format!("CSS class `{class}` cannot be used as a Rust constant"),
+                )
+            })?;
+            Ok(quote! { pub const #name: &str = #value; })
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    let path = LitStr::new(&path.to_string_lossy(), map.span());
 
-                quote! {
-                    pub const #key_ident: &str = #value_str;
-                }
-            });
-            quote! { #(#const_decls)* }
+    Ok(quote! {
+        #[allow(dead_code, non_upper_case_globals)]
+        pub mod #module {
+            // Register the map with rustc so a CSS change invalidates this macro.
+            const _: &str = include_str!(#path);
+            #(#constants)*
         }
-        _ => quote! {},
-    }
+    })
 }

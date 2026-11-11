@@ -1,12 +1,29 @@
 {
+  "name": "sqlight",
+  "private": true,
+  "scripts": {
+    "assets": "node scripts/build-assets.mjs",
+    "dev": "trunk serve --open",
+    "build": "trunk build --release",
+    "test:browser": "node scripts/smoke-test.mjs"
+  },
+  "engines": {
+    "node": "^24.15.0 || >=26.0.0"
+  },
   "devDependencies": {
-    "cssnano": "^7.0.7",
-    "postcss": "^8.5.3",
-    "postcss-cli": "^11.0.1",
-    "postcss-mixins": "^11.0.3",
-    "postcss-modules": "^6.0.1",
-    "postcss-plugin": "^1.0.0",
-    "postcss-preset-env": "^10.1.6",
-    "postcss-simple-vars": "^7.0.1"
+    "@floating-ui/dom": "1.8.0",
+    "@fontsource-variable/open-sans": "5.3.0",
+    "@fontsource-variable/source-code-pro": "5.3.1",
+    "ace-builds": "1.45.2",
+    "cssnano": "9.9.0",
+    "esbuild": "0.28.2",
+    "normalize.css": "8.0.1",
+    "playwright": "1.65.0",
+    "postcss": "8.5.32",
+    "postcss-mixins": "12.1.2",
+    "postcss-modules": "9.0.1",
+    "postcss-preset-env": "11.6.2",
+    "postcss-simple-vars": "7.0.1",
+    "split-grid": "1.0.11"
   }
 }

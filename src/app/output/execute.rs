@@ -2,120 +2,87 @@ use istyles::istyles;
 use leptos::prelude::*;
 use reactive_stores::Store;
 
-use crate::app::{
-    output::{header::Header, loader::Loader, section::Section, simple_pane::SimplePane},
-    state::{GlobalState, GlobalStateStoreFields},
+use crate::{
+    SQLiteStatementResult, SQLiteStatementTable,
+    app::{
+        output::{header::Header, loader::Loader, section::Section},
+        state::{GlobalState, GlobalStateStoreFields},
+    },
 };
-use crate::{SQLiteStatementResult, SQLiteStatementTable};
 
 istyles!(
     styles,
     "assets/module.postcss/output/execute.module.css.map"
 );
 
-fn get_output(table: &SQLiteStatementTable) -> Option<AnyView> {
+fn statement_output(table: &SQLiteStatementTable, index: usize) -> AnyView {
     let Some(values) = &table.values else {
-        return None;
+        return ().into_any();
     };
-    Some(
-        view! {
-            <table
-                class=styles::table
-                style="table-layout: fixed; width: 100%; word-wrap: break-word;"
-            >
-                <tr>
+
+    let label = format!("Statement #{}", index + 1);
+    let output = view! {
+        <div class=styles::tableScroll>
+            <table class=styles::table aria-label=label.clone()>
+                <thead>
+                    <tr>
+                        {values
+                            .columns
+                            .iter()
+                            .map(|column| {
+                                view! { <th scope="col" class=styles::tdAndTh>{column.clone()}</th> }
+                            })
+                            .collect_view()}
+                    </tr>
+                </thead>
+                <tbody>
                     {values
-                        .columns
+                        .rows
                         .iter()
-                        .map(|s| {
-                            view! { <th class=styles::tdAndTh>{s.to_string()}</th> }
-                        })
-                        .collect_view()}
-                </tr>
-                {values
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        view! {
-                            <tr>
-
-                                {row
-                                    .iter()
-                                    .map(|s| {
-                                        view! { <td class=styles::tdAndTh>{s.to_string()}</td> }
-                                    })
-                                    .collect_view()}
-                            </tr>
-                        }
-                    })
-                    .collect_view()}
-            </table>
-        }
-        .into_any(),
-    )
-}
-
-#[component]
-fn Output() -> AnyView {
-    let state = expect_context::<Store<GlobalState>>();
-
-    view! {
-        <>
-            <Show
-                when=move || {
-                    state
-                        .output()
-                        .read()
-                        .last()
-                        .is_none_or(|r| !matches!(r, SQLiteStatementResult::Finish))
-                }
-                fallback=|| ()
-            >
-                <Loader />
-            </Show>
-
-            <>
-                {move || {
-                    state
-                        .output()
-                        .read()
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, item)| {
-                            match &item {
-                                SQLiteStatementResult::Finish => {
-
-                                    view! { <Header label="Finished".into() /> }
-                                        .into_any()
-                                }
-                                SQLiteStatementResult::Step(table) => {
-                                    let label = format!("Statement #{}", idx + 1);
-                                    if let Some(output) = get_output(table) {
-                                        view! {
-                                            <Section label=label>
-                                                <p>{output}</p>
-                                            </Section>
-                                        }
-                                            .into_any()
-                                    } else {
-                                        ().into_any()
-                                    }
-                                }
+                        .map(|row| {
+                            view! {
+                                <tr>
+                                    {row
+                                        .iter()
+                                        .map(|value| {
+                                            view! { <td class=styles::tdAndTh>{value.clone()}</td> }
+                                        })
+                                        .collect_view()}
+                                </tr>
                             }
                         })
-                        .collect_view()
-                }}
-            </>
-        </>
-    }
-    .into_any()
+                        .collect_view()}
+                </tbody>
+            </table>
+        </div>
+    };
+
+    view! { <Section label=label>{output}</Section> }.into_any()
 }
 
 #[component]
 pub fn Execute() -> impl IntoView {
+    let state = expect_context::<Store<GlobalState>>();
+
     view! {
-        <SimplePane>
-            <Output />
-        </SimplePane>
+        <>
+            <Show when=move || state.is_running().get()>
+                <Loader />
+            </Show>
+            {move || {
+                state
+                    .output()
+                    .read()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, result)| match result {
+                        SQLiteStatementResult::Finish => {
+                            view! { <Header label="Finished".into() /> }.into_any()
+                        }
+                        SQLiteStatementResult::Step(table) => statement_output(table, index),
+                    })
+                    .collect_view()
+            }}
+        </>
     }
 }
