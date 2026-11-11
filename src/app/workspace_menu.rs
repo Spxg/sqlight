@@ -12,9 +12,9 @@ use crate::{
         delete_workspace,
         menu_aside::MenuAside,
         menu_group::MenuGroup,
-        new_workspace, rename_workspace, switch_workspace,
+        new_workspace, rename_workspace, switch_workspace, use_database,
     },
-    send_request,
+    send_create_and_use, send_request,
 };
 
 istyles!(
@@ -42,14 +42,15 @@ pub fn WorkspaceMenu() -> impl IntoView {
         if !busy.get() && refreshed.get_value().as_ref() != Some(&key) {
             refreshed.set_value(Some(key));
             state.databases().set(Vec::new());
-            send_request(state, WorkerRequest::ListDbs);
+            state.files().set(None);
+            send_request(state, WorkerRequest::ListFiles);
         }
     });
 
     let create_database = move || {
         let filename = database_name.get_untracked().trim().to_owned();
         if !busy.get_untracked() && !filename.is_empty() {
-            send_request(state, WorkerRequest::CreateDb(filename));
+            send_create_and_use(state, filename);
         }
     };
     let create_error = move || {
@@ -85,7 +86,12 @@ pub fn WorkspaceMenu() -> impl IntoView {
         names
             .into_iter()
             .map(|name| {
-                let label = name.clone();
+                let exists = state.databases().with(|names| names.contains(&name));
+                let label = if !exists && state.files().read().is_some() {
+                    format!("{name} (Missing)")
+                } else {
+                    name.clone()
+                };
                 view! { <option value=name>{label}</option> }
             })
             .collect_view()
@@ -160,10 +166,7 @@ pub fn WorkspaceMenu() -> impl IntoView {
                     </MenuAside>
                 }.into_any())
                 on_change=move |event: Event| {
-                    batch(move || {
-                        state.database().set(event_target_value(&event));
-                        state.keep_ctx().set(true);
-                    });
+                    use_database(state, event_target_value(&event));
                 }
             >
                 {databases}
@@ -192,7 +195,7 @@ pub fn WorkspaceMenu() -> impl IntoView {
                         })
                         on_click=move |_| create_database()
                     >
-                        "Create database"
+                        "Create and use"
                     </Button>
                 </ButtonSet>
             </div>
@@ -246,7 +249,11 @@ pub fn WorkspaceMenu() -> impl IntoView {
                     </MenuAside>
                 }.into_any())
                 on_change=move |event| {
-                    state.engine().set(Engine::from_select(&event_target_value(&event)));
+                    batch(move || {
+                        state.engine().set(Engine::from_select(&event_target_value(&event)));
+                        state.files().set(None);
+                        state.databases().set(Vec::new());
+                    });
                 }
             >
                 {[Engine::SQLite, Engine::MultipleCiphers, Engine::SQLCipher]

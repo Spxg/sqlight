@@ -134,6 +134,7 @@ fn load_shared_code(state: Store<GlobalState>) -> Result<(), JsValue> {
     batch(move || {
         state.sql().set(code);
         state.database().set(database);
+        state.pending_database().set(true);
         state.engine().set(engine);
         state.keep_ctx().set(keep_ctx);
         state.read_only().set(read_only);

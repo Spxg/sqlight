@@ -32,6 +32,7 @@ fn load_editor(state: Store<GlobalState>) {
         state.import_progress().set(None);
         state.exported().set(None);
         state.databases().set(Vec::new());
+        state.files().set(None);
     });
     state.read_untracked().save();
 }
@@ -71,6 +72,15 @@ pub(crate) fn rename_workspace(state: Store<GlobalState>, name: String) {
         return;
     }
     state.workspace_name().set(name.to_owned());
+    state.read_untracked().save();
+}
+
+pub(crate) fn use_database(state: Store<GlobalState>, filename: String) {
+    batch(move || {
+        state.database().set(filename);
+        state.pending_database().set(false);
+        state.keep_ctx().set(true);
+    });
     state.read_untracked().save();
 }
 

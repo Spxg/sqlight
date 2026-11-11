@@ -115,7 +115,12 @@ impl SQLiteDb {
             unsafe { sqlite3_close(handle) };
             return Err(SQLitendError::OpenDb(error));
         }
-        Ok(Self { handle })
+        let db = Self { handle };
+        // OPFS has no shared-memory methods. Exclusive mode keeps WAL's index
+        // in this worker's memory, including when the database is read-only.
+        db.prepare("PRAGMA locking_mode=EXCLUSIVE;")?
+            .results(&mut Vec::new())?;
+        Ok(db)
     }
 
     pub fn prepare(&self, sql: &str) -> Result<SQLiteStatements<'_>> {

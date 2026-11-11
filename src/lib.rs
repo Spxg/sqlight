@@ -1,4 +1,5 @@
 pub mod app;
+mod archive;
 mod protocol;
 #[cfg(feature = "sqlite3")]
 pub mod worker;
@@ -6,7 +7,7 @@ mod worker_client;
 
 pub use protocol::*;
 pub use send_wrapper::SendWrapper;
-pub(crate) use worker_client::send_request;
+pub(crate) use worker_client::{send_create_and_use, send_request};
 
 use aceditor::EditorError;
 
@@ -18,6 +19,8 @@ pub enum SQLightError {
     AceEditor(#[from] EditorError),
     #[error("Failed to import db: {0}")]
     ImportDb(String),
+    #[error("Failed to export db: {0}")]
+    ExportDb(String),
     #[error("Query results were not embedded because the SQL changed during execution.")]
     EmbedChanged,
 }

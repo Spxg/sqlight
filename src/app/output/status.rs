@@ -18,10 +18,10 @@ fn error_details(error: &SQLightError) -> &'static str {
                 SQLitendError::OpenDb(error)
                 | SQLitendError::Prepare(error)
                 | SQLitendError::Step(error)
-                    if error.code == 8 =>
+                    if error.code & 0xff == 8 =>
                 {
                     "This workspace is read only. Turn off Read only in its connection \
-                    settings to allow SQL writes."
+                    settings to allow SQL writes or recover a database with a hot journal."
                 }
                 SQLitendError::OpenDb(error)
                 | SQLitendError::Prepare(error)
@@ -49,16 +49,29 @@ fn error_details(error: &SQLightError) -> &'static str {
             WorkerError::InvalidState => {
                 "Enable Fresh database per run to rebuild the selected main database, then run again."
             }
-            WorkerError::LoadDb(_) => "Check that the imported file is a SQLite database.",
+            WorkerError::LoadDb(_) => {
+                "Choose SQLite database files or a ZIP containing databases and their matching logs."
+            }
             WorkerError::CreateDb(_) => {
                 "Choose an unused database filename. Existing files are not overwritten."
             }
             WorkerError::DownloadDb(_) => {
-                "Commit or roll back any active transaction, then try downloading again."
+                "Use ZIP to include WAL and journal files. Commit or roll back any active \
+                transaction before downloading."
             }
             WorkerError::ActiveTransaction => {
-                "Previous database settings were restored. Run COMMIT or ROLLBACK, \
-                then try again."
+                "Run COMMIT or ROLLBACK before disconnecting, changing connection settings, \
+                replacing connected databases, or deleting files."
+            }
+            WorkerError::MissingDatabase(_) => {
+                "Open Files to upload or create this database, or choose another main database \
+                in the workspace settings. Your SQL draft is preserved."
+            }
+            WorkerError::FilesInUse(_) => {
+                "Disconnect the SQL connection in Files before deleting its main or attached databases."
+            }
+            WorkerError::Filesystem(_) => {
+                "Open Files, refresh the file list, and try the operation again."
             }
             WorkerError::OpfsSAHPoolOpened => {
                 "OPFS storage is already open in another browser tab. \
@@ -70,7 +83,10 @@ fn error_details(error: &SQLightError) -> &'static str {
         },
         SQLightError::AceEditor(_) => "Please report this error on GitHub.",
         SQLightError::ImportDb(_) => {
-            "The file could not be read. Check that it is accessible and fits in memory."
+            "Choose a SQLite database or a ZIP containing database files and their matching logs."
+        }
+        SQLightError::ExportDb(_) => {
+            "The ZIP could not be created. Try downloading fewer databases at a time."
         }
         SQLightError::EmbedChanged => {
             "Your current SQL was preserved. Open the Execution tab to view the results."
@@ -107,7 +123,7 @@ pub fn Status() -> impl IntoView {
             let status = match progress.opened {
                 Some(true) => "Database imported.",
                 Some(false) => "Import failed.",
-                None if progress.loaded == progress.total => "Opening database…",
+                None if progress.loaded == progress.total => "Preparing database files…",
                 None => "Reading file…",
             };
 

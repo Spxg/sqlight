@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { chooseFiles, closeFiles, databaseGroup, openFiles } from './files-helpers.mjs';
 
 export async function checkEngineSelection(page) {
   const engineSelect = page.getByRole('combobox', {
@@ -18,6 +19,14 @@ export async function checkEngineSelection(page) {
       (engine) => JSON.parse(localStorage.getItem('config'))?.engine === engine,
       savedValue,
     );
+    const filename = await page.evaluate(() => JSON.parse(localStorage.getItem('config')).database);
+    const files = await openFiles(page);
+    if (!await databaseGroup(files, filename).count()) {
+      await chooseFiles(page, [[filename, new Uint8Array()]]);
+      await page.getByText('Database imported.', { exact: true }).waitFor();
+    } else {
+      await closeFiles(page);
+    }
   }
 
   async function run(sql) {
@@ -205,6 +214,7 @@ async function checkWorkerContext(page) {
           await request({ Open: { ...database, read_only } }),
         );
         const key = engine === 'sqlite3' ? '' : "PRAGMA key='readonly-key'; ";
+        unwrap(await request({ CreateScratch: database.filename }));
         await open(false);
         await sql(key + `PRAGMA journal_mode=PERSIST;
           CREATE TABLE protected(value);
@@ -232,8 +242,9 @@ async function checkWorkerContext(page) {
         if (unwrap(await request({ CreateDb: created })) !== created)
           throw new Error(`${engine}: CreateDb changed the requested filename`);
         const createdFile = unwrap(await request({ DownloadFile: created }));
-        if (createdFile.filename !== created || !createdFile.data.length
-          || new TextDecoder().decode(createdFile.data.slice(0, 16)) !== 'SQLite format 3\0') {
+        if (createdFile.filename !== created || (engine === 'sqlite3'
+          ? new TextDecoder().decode(createdFile.data.slice(0, 16)) !== 'SQLite format 3\0'
+          : createdFile.data.length !== 0)) {
           throw new Error(`${engine}: CreateDb did not initialize a valid downloadable database`);
         }
         for (const filename of [created, database.filename]) {
@@ -248,6 +259,38 @@ async function checkWorkerContext(page) {
         }
         const downloaded = unwrap(await request({ DownloadFile: database.filename }));
         if (engine !== 'sqlite3') encryptedHeader(downloaded.data);
+        const bundle = unwrap(await request({ DownloadBundle: [database.filename] }));
+        if (bundle.filename !== `${database.filename}.zip`
+          || !bundle.files.some((file) => file.filename === `${database.filename}-journal`)) {
+          throw new Error(`${engine}: Bundle download omitted the retained journal`);
+        }
+        const bundledMain = bundle.files.find((file) => file.filename === database.filename).data;
+        if (bundledMain.length !== downloaded.data.length
+          || bundledMain.some((byte, index) => byte !== downloaded.data[index])) {
+          throw new Error(`${engine}: Bundle download changed the encrypted database bytes`);
+        }
+        const snapshot = unwrap(await request('ListFiles'));
+        if (snapshot.connection?.filename !== database.filename || !snapshot.connection.read_only
+          || snapshot.in_transaction || !snapshot.files.find((file) => file.filename === database.filename)?.in_use) {
+          throw new Error(`${engine}: File snapshot did not describe the active read-only connection`);
+        }
+        for (const file of bundle.files) {
+          const listed = snapshot.files.find((entry) => entry.filename === file.filename);
+          if (!listed?.in_use || listed.size !== file.data.length)
+            throw new Error(`${engine}: File snapshot omitted a log's size or connection usage`);
+        }
+        const blockedDelete = await request({ DeleteFiles: [created, database.filename] });
+        if (!blockedDelete.DeleteFiles.Err?.FilesInUse
+          || !unwrap(await request('ListDbs')).includes(created)) {
+          throw new Error(`${engine}: Deleting an active file partially deleted another database`);
+        }
+        const missingDelete = await request({ DeleteFiles: [created, 'missing-delete.db'] });
+        if (missingDelete.DeleteFiles.Err?.MissingDatabase !== 'missing-delete.db'
+          || !unwrap(await request('ListDbs')).includes(created)) {
+          throw new Error(`${engine}: DeleteFiles did not validate all missing files before deletion`);
+        }
+        unwrap(await request({ CreateDb: 'unrelated-delete.db' }));
+        unwrap(await request({ DeleteFiles: ['unrelated-delete.db'] }));
         const preserved = await sql(`PRAGMA query_only;
           PRAGMA cache_size; SELECT value FROM protected;`);
         if (value(preserved, 'query_only') !== '1'
@@ -268,6 +311,11 @@ async function checkWorkerContext(page) {
         const journal = unwrap(await request('DownloadDb')).data;
         if (!journal.length || journal[0] !== 0)
           throw new Error(`${engine}: Read-only export removed the journal`);
+        const bundledJournal = bundle.files.find((file) => file.filename === `${database.filename}-journal`).data;
+        if (journal.length !== bundledJournal.length
+          || journal.some((byte, index) => byte !== bundledJournal[index])) {
+          throw new Error(`${engine}: Bundle download changed the journal`);
+        }
 
         await open(true);
         const companion = `${database.filename}-shared.db`;
@@ -277,10 +325,16 @@ async function checkWorkerContext(page) {
         await sql(key + 'BEGIN; SELECT value FROM protected;');
         const blockedCreateName = `readonly-blocked-${engine}.db`;
         const blockedCreate = await request({ CreateDb: blockedCreateName });
-        if (blockedCreate.CreateDb.Err !== 'ActiveTransaction'
-          || unwrap(await request('ListDbs')).includes(blockedCreateName)
+        if (unwrap(blockedCreate) !== blockedCreateName
+          || !unwrap(await request('ListDbs')).includes(blockedCreateName)
           || value(await sql('SELECT value FROM protected;'), 'value') !== '321') {
-          throw new Error(`${engine}: Failed CreateDb changed the current transaction or key`);
+          throw new Error(`${engine}: CreateDb changed the current transaction or key`);
+        }
+        const duringTransaction = unwrap(await request('ListFiles'));
+        if (!duringTransaction.in_transaction
+          || (await request({ DeleteFiles: [blockedCreateName] })).DeleteFiles.Err !== 'ActiveTransaction'
+          || !unwrap(await request('ListDbs')).includes(blockedCreateName)) {
+          throw new Error(`${engine}: Files management discarded the current transaction`);
         }
         const reset = unwrap(await request({
           Run: {
@@ -329,6 +383,7 @@ async function checkWorkerContext(page) {
           throw new Error(`${engine}: Writable file download reset the connection or key`);
         }
 
+        unwrap(await request({ CreateDb: 'empty-readonly.db' }));
         unwrap(await request({
           Open: { filename: 'empty-readonly.db', read_only: true },
         }));
@@ -336,13 +391,19 @@ async function checkWorkerContext(page) {
         if (value(empty, 'integrity_check') !== "'ok'")
           throw new Error(`${engine}: Read-only workspace initialized an invalid database`);
         const initialized = unwrap(await request('DownloadDb')).data;
-        if (new TextDecoder().decode(initialized.slice(0, 16)) !== 'SQLite format 3\0')
+        if (initialized.length && new TextDecoder().decode(initialized.slice(0, 16)) !== 'SQLite format 3\0')
           throw new Error(`${engine}: Empty read-only workspace was not initialized`);
         unwrap(await request({ Open: { filename: created, read_only: true } }));
         if (value(await sql('SELECT count(*) AS count FROM sqlite_schema;'), 'count') !== '0')
           throw new Error(`${engine}: Newly created database did not have an empty schema`);
         if ((sqliteErrorCode(await request(run('CREATE TABLE forbidden(value);'))) & 0xff) !== 8)
           throw new Error(`${engine}: Selecting a new database lost the read-only setting`);
+        if (engine !== 'sqlite3') {
+          unwrap(await request({ Open: { filename: created } }));
+          await sql(`PRAGMA key='new-database-key'; CREATE TABLE keyed_new(value);
+            INSERT INTO keyed_new VALUES (123);`);
+          encryptedHeader(unwrap(await request({ DownloadFile: created })).data);
+        }
       }
 
       async function checkDownloadWal() {
@@ -350,6 +411,7 @@ async function checkWorkerContext(page) {
         const target = 'download-wal.db';
         const key = engine === 'sqlite3' ? '' : "PRAGMA key='download-key'; ";
         const attachKey = engine === 'sqlite3' ? '' : "KEY 'download-key'";
+        unwrap(await request({ CreateScratch: main }));
         unwrap(await request({ Open: { filename: main } }));
         await sql(key + `CREATE TABLE connection_marker(value);
           INSERT INTO connection_marker VALUES (123);
@@ -362,6 +424,15 @@ async function checkWorkerContext(page) {
         const before = unwrap(await request({ DownloadFile: `${target}-wal` }));
         if (!before.data.length)
           throw new Error(`${engine}: WAL download regression did not create a WAL`);
+        const bundle = unwrap(await request({ DownloadBundle: [target] }));
+        const bundledWal = bundle.files.find((file) => file.filename === `${target}-wal`)?.data;
+        if (!bundledWal || bundledWal.length !== before.data.length
+          || bundledWal.some((byte, index) => byte !== before.data[index])) {
+          throw new Error(`${engine}: Bundle download changed or checkpointed the WAL`);
+        }
+        const all = unwrap(await request({ DownloadBundle: [main, target] }));
+        if (all.filename !== 'databases.zip' || !all.files.some((file) => file.filename === main))
+          throw new Error(`${engine}: Multiple database bundle omitted a main file`);
         const downloaded = unwrap(await request({ DownloadFile: target }));
         if (downloaded.filename !== target)
           throw new Error(`${engine}: WAL download changed the selected filename`);
@@ -381,12 +452,88 @@ async function checkWorkerContext(page) {
         unwrap(await request('Close'));
         const peer = await startWorker(engine);
         try {
-          unwrap(await peer.request({ Open: { filename: 'download-restored.db' } }));
-          unwrap(await peer.request({ LoadDb: { data: downloaded.data } }));
-          const restored = unwrap(await peer.request(run(key + `PRAGMA locking_mode=EXCLUSIVE;
-            SELECT value FROM downloaded;`)));
+          unwrap(await peer.request({ CreateDb: 'download-reader.db' }));
+          unwrap(await peer.request({ Open: { filename: 'download-reader.db', read_only: true } }));
+          const restoredName = 'download-restored.db';
+          unwrap(await peer.request({ LoadDbs: {
+            files: bundle.files.map((file) => ({
+              filename: restoredName + file.filename.slice(target.length), data: file.data,
+            })).reverse(),
+            replace: false,
+          } }));
+          unwrap(await peer.request({ Open: { filename: restoredName, read_only: true } }));
+          const restored = unwrap(await peer.request(run(key + 'SELECT value FROM downloaded;')));
           if (restored.error || value(restored, 'value') !== '456')
-            throw new Error(`${engine}: WAL download did not include committed data`);
+            throw new Error(`${engine}: Read-only bundle restore lost the WAL data`);
+          if ((sqliteErrorCode(await peer.request(run('INSERT INTO downloaded VALUES (999);'))) & 0xff) !== 8)
+            throw new Error(`${engine}: WAL bundle restore lost the read-only setting`);
+          const restoredBundle = unwrap(await peer.request({ DownloadBundle: [restoredName] }));
+          const restoredWal = restoredBundle.files.find((file) => file.filename === `${restoredName}-wal`)?.data;
+          if (!restoredWal || restoredWal.length !== bundledWal.length
+            || restoredWal.some((byte, index) => byte !== bundledWal[index])) {
+            throw new Error(`${engine}: Read-only WAL recovery changed the archived WAL`);
+          }
+          unwrap(await peer.request('Close'));
+        } finally {
+          peer.terminate();
+        }
+      }
+
+      async function checkFilesystem() {
+        const disconnected = unwrap(await request('ListFiles'));
+        if (disconnected.connection || disconnected.in_transaction)
+          throw new Error(`${engine}: Files listing opened an SQL connection`);
+        const group = ['fs-delete-group.db', 'fs-delete-group.db-journal',
+          'fs-delete-group.db-wal', 'fs-delete-group.db-shm'];
+        unwrap(await request({ LoadDbs: {
+          files: group.map((filename) => ({ filename, data: new Uint8Array() })), replace: false,
+        } }));
+        if (unwrap(await request('ListFiles')).connection)
+          throw new Error(`${engine}: Uploading files opened an SQL connection`);
+        const archived = unwrap(await request({ DownloadBundle: [group[0]] }));
+        if (archived.files.length !== 4)
+          throw new Error(`${engine}: Files archive omitted an empty sidecar`);
+        const deleted = unwrap(await request({ DeleteFiles: [group[2]] }));
+        if (deleted.length !== 4 || unwrap(await request('ListFiles')).files.some((file) => group.includes(file.filename)))
+          throw new Error(`${engine}: Deleting a sidecar did not delete its complete database group`);
+
+        unwrap(await request({ CreateScratch: 'fs-orphan-source.db' }));
+        unwrap(await request({ Open: { filename: 'fs-orphan-source.db' } }));
+        await sql(`ATTACH 'fs-orphan.db-wal' AS orphan;
+          CREATE TABLE orphan.marker(value); DETACH orphan;`);
+        unwrap(await request('Close'));
+        const orphan = unwrap(await request({ DownloadBundle: ['fs-orphan.db-wal'] }));
+        if (orphan.files.length !== 1 || orphan.files[0].filename !== 'fs-orphan.db-wal')
+          throw new Error(`${engine}: Orphan file could not be archived independently`);
+        if (unwrap(await request('ListFiles')).connection)
+          throw new Error(`${engine}: Downloading an orphan opened an SQL connection`);
+        unwrap(await request({ DeleteFiles: ['fs-orphan.db-wal'] }));
+        unwrap(await request({ CreateScratch: 'deleted-scratch.db' }));
+        unwrap(await request({ DeleteFiles: ['deleted-scratch.db'] }));
+        const missing = await request({ Open: { filename: 'deleted-scratch.db' } });
+        if (missing.Open.Err?.MissingDatabase !== 'deleted-scratch.db'
+          || (await request({ CreateScratch: 'deleted-scratch.db' })).CreateScratch.Err?.MissingDatabase !== 'deleted-scratch.db') {
+          throw new Error(`${engine}: A deleted database was recreated by Open or stale initialization`);
+        }
+        unwrap(await request('BootstrapDefault'));
+        if (unwrap(await request({ DownloadFile: 'default.db' })).data.length !== 0)
+          throw new Error(`${engine}: Default bootstrap wrote plaintext pages before the first key`);
+        unwrap(await request({ DeleteFiles: ['default.db'] }));
+        if ((await request('BootstrapDefault')).BootstrapDefault.Err?.MissingDatabase !== 'default.db')
+          throw new Error(`${engine}: Bootstrap recreated a deleted default database`);
+        unwrap(await request('Close'));
+        const peer = await startWorker(engine);
+        try {
+          if ((await peer.request('BootstrapDefault')).BootstrapDefault.Err?.MissingDatabase !== 'default.db'
+            || (await peer.request({ CreateScratch: 'deleted-scratch.db' })).CreateScratch.Err?.MissingDatabase !== 'deleted-scratch.db') {
+            throw new Error(`${engine}: Initialization markers did not survive a worker restart`);
+          }
+          const snapshot = unwrap(await peer.request('ListFiles'));
+          if (snapshot.connection || snapshot.files.some((file) => ['default.db', 'deleted-scratch.db'].includes(file.filename)))
+            throw new Error(`${engine}: Missing files reappeared in a new worker`);
+          unwrap(await peer.request({ CreateDb: 'deleted-scratch.db' }));
+          if (unwrap(await peer.request({ CreateScratch: 'deleted-scratch.db' })) !== 'deleted-scratch.db')
+            throw new Error(`${engine}: Explicit recreation could not replace a deleted database`);
           unwrap(await peer.request('Close'));
         } finally {
           peer.terminate();
@@ -394,9 +541,34 @@ async function checkWorkerContext(page) {
       }
 
       try {
+        const initialFiles = unwrap(await request('ListFiles'));
+        if (initialFiles.files.length || initialFiles.connection)
+          throw new Error(`${engine}: Listing a new filesystem created a database or connection`);
+        const missing = await request({ Open: { filename: 'smoke.db' } });
+        if (missing.Open.Err?.MissingDatabase !== 'smoke.db'
+          || unwrap(await request('ListDbs')).length) {
+          throw new Error(`${engine}: Opening a missing database implicitly created it`);
+        }
+        unwrap(await request({ CreateScratch: 'smoke.db' }));
         unwrap(
           await request({ Open: { filename: 'smoke.db' } }),
         );
+        const untouched = unwrap(await request({ DownloadBundle: unwrap(await request('ListDbs')) }));
+        if (untouched.files.length !== 1 || untouched.files[0].data.length !== 0)
+          throw new Error(`${engine}: Opening an unwritten database unexpectedly wrote its pages`);
+        unwrap(await request({ LoadDbs: {
+          files: [{ filename: 'empty-import.db', data: untouched.files[0].data }], replace: false,
+        } }));
+        const emptyAll = unwrap(await request({ DownloadBundle: unwrap(await request('ListDbs')) }));
+        if (emptyAll.filename !== 'databases.zip' || emptyAll.files.length !== 2
+          || emptyAll.files.some((file) => file.data.length !== 0)) {
+          throw new Error(`${engine}: All-databases bundle did not preserve empty databases`);
+        }
+        unwrap(await request({ Open: { filename: 'empty-import.db', read_only: true } }));
+        const emptyImported = await sql('SELECT count(*) AS count FROM sqlite_schema; PRAGMA integrity_check;');
+        if (value(emptyImported, 'count') !== '0' || value(emptyImported, 'integrity_check') !== "'ok'")
+          throw new Error(`${engine}: Empty bundle import was not a readable SQLite database`);
+        unwrap(await request({ Open: { filename: 'smoke.db' } }));
         if (engine === 'sqlcipher') {
           const version = await sql('PRAGMA cipher_version;');
           if (!/^'\d+\.\d+\./.test(value(version, 'cipher_version')))
@@ -423,10 +595,13 @@ async function checkWorkerContext(page) {
         if (!transaction.DownloadDb.Err)
           throw new Error(`${engine}: Export accepted an uncommitted transaction`);
         const transactionCreate = await request({ CreateDb: 'blocked-create.db' });
-        if (transactionCreate.CreateDb.Err !== 'ActiveTransaction'
-          || unwrap(await request('ListDbs')).includes('blocked-create.db')) {
-          throw new Error(`${engine}: CreateDb did not reject a transaction without creating a file`);
+        if (unwrap(transactionCreate) !== 'blocked-create.db'
+          || !unwrap(await request('ListDbs')).includes('blocked-create.db')) {
+          throw new Error(`${engine}: CreateDb could not create an unrelated database during a transaction`);
         }
+        const unsafeClose = await request('Close');
+        if (unsafeClose.Close.Err !== 'ActiveTransaction')
+          throw new Error(`${engine}: Close discarded an active transaction`);
         for (const options of [
           { filename: 'smoke.db', read_only: true },
           { filename: 'other.db' },
@@ -460,6 +635,7 @@ async function checkWorkerContext(page) {
         }
 
         if (engine !== 'sqlite3') {
+          unwrap(await request({ CreateScratch: 'encrypted.db' }));
           unwrap(
             await request({
               Open: { filename: 'encrypted.db' },
@@ -493,6 +669,7 @@ async function checkWorkerContext(page) {
             throw new Error(`${engine}: sqlite-vec failed on an encrypted database`);
         }
 
+        unwrap(await request({ CreateScratch: `smoke-${engine}.db` }));
         unwrap(
           await request({
             Open: { filename: `smoke-${engine}.db` },
@@ -635,6 +812,7 @@ async function checkWorkerContext(page) {
           const source = { filename: `${prefix}-source.db`, workspace: `${prefix}-source` };
           const aName = `${prefix}-a.db`;
           const bName = `${prefix}-b.db`;
+          unwrap(await request({ CreateScratch: source.filename }));
           unwrap(await request({ Open: source }));
           await sql(`CREATE TABLE shared_data(value);
             INSERT INTO shared_data VALUES (1);`);
@@ -691,6 +869,8 @@ async function checkWorkerContext(page) {
             [{ filename: 'duplicate.db', data: first }, { filename: 'duplicate.db', data: second }],
             [{ filename: 'not-written.db', data: first }, { filename: 'invalid.db', data: new Uint8Array(6) }],
             [{ filename: 'bad/name.db', data: first }],
+            [{ filename: 'orphan.db-wal', data: new Uint8Array() }],
+            [{ filename: 'orphan-good.db', data: first }, { filename: 'absent.db-journal', data: new Uint8Array() }],
           ]) {
             const failed = await request({ LoadDbs: { files, replace: false } });
             if (!failed.LoadDbs.Err)
@@ -698,8 +878,26 @@ async function checkWorkerContext(page) {
           }
           const names = unwrap(await request('ListDbs'));
           if (!names.includes(aName) || !names.includes(bName)
-            || names.includes('duplicate.db') || names.includes('not-written.db')) {
+            || names.includes('duplicate.db') || names.includes('not-written.db') || names.includes('orphan-good.db')) {
             throw new Error(`${engine}: Batch validation left a partial import`);
+          }
+          const journalMagic = new Uint8Array([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+          const superName = new TextEncoder().encode('/tmp/目录/main.db-mj1234569ab');
+          const superJournal = new Uint8Array(512 + superName.length + 16);
+          superJournal.set(journalMagic);
+          superJournal.set(superName, 512);
+          const footer = new DataView(superJournal.buffer, 512 + superName.length);
+          footer.setUint32(0, superName.length);
+          footer.setUint32(4, superName.reduce((sum, byte) => (sum + (byte < 128 ? byte : byte - 256)) >>> 0, 0));
+          superJournal.set(journalMagic, superJournal.length - 8);
+          const unsupported = await request({ LoadDbs: {
+            files: [{ filename: 'super-ref.db', data: first },
+              { filename: 'super-ref.db-journal', data: superJournal }],
+            replace: false,
+          } });
+          if (!/super-journal/.test(unsupported.LoadDbs.Err?.LoadDb ?? '')
+            || unwrap(await request('ListDbs')).includes('super-ref.db')) {
+            throw new Error(`${engine}: Import accepted a journal missing its super-journal`);
           }
 
           const specialName = `${prefix} sp ace?#%你好.db`;
@@ -713,6 +911,7 @@ async function checkWorkerContext(page) {
             throw new Error(`${engine}: SQLite URI changed the uploaded filename`);
 
           const joined = { filename: `${prefix}-join.db`, workspace: `${prefix}-first` };
+          unwrap(await request({ CreateScratch: joined.filename }));
           unwrap(await request({ Open: joined }));
           const joinedResult = await sql(`ATTACH '${aName}' AS a;
             ATTACH '${bName}' AS b;
@@ -729,6 +928,11 @@ async function checkWorkerContext(page) {
           const busyDownload = await request({ DownloadFile: bName });
           if (!busyDownload.DownloadDb.Err)
             throw new Error(`${engine}: Download accepted a mounted file during a transaction`);
+          if (!(await request({ DownloadBundle: [bName] })).DownloadBundle.Err)
+            throw new Error(`${engine}: Bundle download accepted a mounted database during a transaction`);
+          const unrelatedBundle = unwrap(await request({ DownloadBundle: [specialName] }));
+          if (unrelatedBundle.files.length !== 1 || unrelatedBundle.files[0].filename !== specialName)
+            throw new Error(`${engine}: Bundle download rejected an unrelated database during a transaction`);
           const unrelatedDownload = unwrap(await request({ DownloadFile: specialName }));
           if (unrelatedDownload.filename !== specialName || unrelatedDownload.data.length !== first.length
             || unrelatedDownload.data.some((byte, index) => byte !== first[index])) {
@@ -772,9 +976,37 @@ async function checkWorkerContext(page) {
           }));
           if (value(await sql('SELECT value FROM shared_data;'), 'value') !== '2')
             throw new Error(`${engine}: Closing a workspace deleted a shared database`);
+
+          const rawMain = first.slice();
+          rawMain[18] = 2;
+          rawMain[19] = 2;
+          const rawGroup = [
+            { filename: 'raw-group.db-shm', data: new Uint8Array([1, 3, 5]) },
+            { filename: 'raw-group.db-wal', data: new Uint8Array() },
+            { filename: 'raw-group.db-journal', data: new Uint8Array([0, 99]) },
+            { filename: 'raw-group.db', data: rawMain },
+          ];
+          const rawLoaded = unwrap(await request({ LoadDbs: { files: rawGroup, replace: false } }));
+          if (JSON.stringify(rawLoaded) !== JSON.stringify(['raw-group.db']))
+            throw new Error(`${engine}: Bundle upload returned sidecars as databases`);
+          const rawBundle = unwrap(await request({ DownloadBundle: ['raw-group.db'] }));
+          for (const original of rawGroup) {
+            const copied = rawBundle.files.find((file) => file.filename === original.filename)?.data;
+            if (!copied || copied.length !== original.data.length
+              || copied.some((byte, index) => byte !== original.data[index])) {
+              throw new Error(`${engine}: Bundle upload changed a header, empty WAL, journal, or SHM`);
+            }
+          }
+          if (unwrap(await request('ListDbs')).some((name) => /-(journal|wal|shm)$/.test(name)))
+            throw new Error(`${engine}: Bundle sidecars appeared in the database list`);
+          unwrap(await request({ Open: { filename: 'raw-group.db', read_only: true } }));
+          const rawReadable = await sql('PRAGMA locking_mode; SELECT value FROM shared_data;');
+          if (value(rawReadable, 'locking_mode') !== "'exclusive'" || value(rawReadable, 'value') !== '1')
+            throw new Error(`${engine}: Raw WAL header did not open read-only in exclusive mode`);
           unwrap(await request('Close'));
         }
         await checkDownloadWal();
+        await checkFilesystem();
         checked.push(engine);
       } finally {
         worker.terminate();

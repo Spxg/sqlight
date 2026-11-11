@@ -12,6 +12,9 @@ import { checkBatchFailures, checkResultPaging } from './result-checks.mjs';
 import { checkSharing } from './share-checks.mjs';
 import { checkWorkspaces } from './workspace-checks.mjs';
 import { checkWorkspaceMenuPosition } from './menu-checks.mjs';
+import { checkArchives } from './archive-checks.mjs';
+import { checkFiles } from './files-checks.mjs';
+import { chooseFiles, downloadDatabase } from './files-helpers.mjs';
 
 const dist = process.argv[2]
   ? path.resolve(process.argv[2])
@@ -216,22 +219,14 @@ try {
   await run(
     "CREATE TABLE imported(value TEXT); INSERT INTO imported VALUES ('roundtrip');",
   );
-  await page.getByRole('button', { name: 'Database', exact: true }).click();
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: /^Download/ }).click();
-  const download = await downloadPromise;
-  const database = await readFile(await download.path());
+  const { data: database } = await downloadDatabase(page, 'default.db');
   assert.equal(database.subarray(0, 16).toString(), 'SQLite format 3\0');
   await page.waitForFunction(() =>
     JSON.parse(localStorage.getItem('config'))?.sql.includes('CREATE TABLE imported'),
   );
   const beforeImport = await page.evaluate(() => JSON.parse(localStorage.getItem('config')));
   assert.equal(beforeImport.database, 'default.db');
-  await page.locator('input[type=file]').setInputFiles({
-    name: 'import.db',
-    mimeType: 'application/vnd.sqlite3',
-    buffer: database,
-  });
+  await chooseFiles(page, [['import.db', database]]);
   await page.getByText('Database imported.', { exact: true }).waitFor();
   const afterImport = await page.evaluate(() => JSON.parse(localStorage.getItem('config')));
   for (const field of ['workspace_id', 'database', 'engine', 'keep_ctx', 'read_only']) {
@@ -243,11 +238,7 @@ try {
   await closeMenu();
   await run('SELECT * FROM imported;');
   await page.getByRole('cell', { name: "'roundtrip'", exact: true }).waitFor();
-  await page.locator('input[type=file]').setInputFiles({
-    name: 'invalid.db',
-    mimeType: 'application/octet-stream',
-    buffer: Buffer.from('invalid'),
-  });
+  await chooseFiles(page, [['invalid.db', Buffer.from('invalid')]]);
   await page.getByText('Import failed.', { exact: true }).waitFor();
   await run('SELECT * FROM imported;');
   await page.getByRole('cell', { name: "'roundtrip'", exact: true }).waitFor();
@@ -285,6 +276,8 @@ try {
   await checkSharing(page);
   await checkWorkspaceMenuPosition(page);
   await checkWorkspaces(page);
+  await checkArchives(page);
+  await checkFiles(page);
 
   await checkEngineSelection(page);
   await checkWorkers(page);
@@ -294,7 +287,7 @@ try {
     'The app should load and run without browser errors',
   );
   console.log(
-    'Browser checks passed: editor, execution, result paging, partial failures, preferences, sharing, workspaces, read-only queries, transfers, all three engines, encryption, and OPFS.',
+    'Browser checks passed: editor, execution, result paging, partial failures, preferences, sharing, workspaces, file management, ZIP transfers, read-only queries, all three engines, encryption, and OPFS.',
   );
 } catch (error) {
   await mkdir('test-results', { recursive: true });

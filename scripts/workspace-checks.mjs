@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { chooseFiles, downloadDatabase } from './files-helpers.mjs';
 
 export async function checkWorkspaces(page) {
   const context = await page.context().browser().newContext();
@@ -137,32 +137,14 @@ export async function checkWorkspaces(page) {
   }
 
   async function download(filename) {
-    await workspacePage.getByRole('button', { name: 'Database', exact: true })
-      .click();
-    if (filename) {
-      await workspacePage.getByRole('combobox', { name: 'Download database', exact: true })
-        .selectOption(filename);
-    }
-    const downloaded = workspacePage.waitForEvent('download');
-    await workspacePage.getByRole('button', { name: /^Download/ }).click();
-    const file = await downloaded;
-    if (filename) assert.equal(file.suggestedFilename(), filename);
-    return readFile(await file.path());
+    const target = filename ?? (await config()).database;
+    const file = await downloadDatabase(workspacePage, target);
+    assert.equal(file.name, target);
+    return file.data;
   }
 
   async function chooseDatabaseFiles(files) {
-    await workspacePage.getByRole('button', { name: 'Database', exact: true })
-      .click();
-    const chooserOpened = workspacePage.waitForEvent('filechooser');
-    await workspacePage.getByRole('button', { name: /^Load/ }).click();
-    const chooser = await chooserOpened;
-    await chooser.setFiles(
-      files.map(([name, buffer]) => ({
-        name,
-        mimeType: 'application/vnd.sqlite3',
-        buffer,
-      })),
-    );
+    await chooseFiles(workspacePage, files);
   }
 
   async function importDatabases(files) {
@@ -214,7 +196,7 @@ export async function checkWorkspaces(page) {
     const menu = await workspaceMenu();
     const name = menu.getByRole('textbox', { name: 'New database name', exact: true });
     await name.fill(filename);
-    await menu.getByRole('button', { name: 'Create database', exact: true }).click();
+    await menu.getByRole('button', { name: 'Create and use', exact: true }).click();
     if (duplicate) {
       await workspacePage.getByRole('tab', { name: 'Status', selected: true }).waitFor();
       await menu.getByRole('alert').filter({
@@ -480,6 +462,7 @@ export async function checkWorkspaces(page) {
     await setReadOnly(false);
     await setFreshDatabase(false);
     await selectEngine('SQLCipher');
+    await importDatabases([[(await config()).database, new Uint8Array(0)]]);
     await run(`PRAGMA key='shared-connection-key';
       CREATE TABLE encrypted_data(value INTEGER);
       INSERT INTO encrypted_data VALUES (41);`);

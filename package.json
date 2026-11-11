@@ -17,6 +17,7 @@
     "ace-builds": "1.45.2",
     "cssnano": "9.9.0",
     "esbuild": "0.28.2",
+    "fflate": "0.8.3",
     "normalize.css": "8.0.1",
     "playwright": "1.65.0",
     "postcss": "8.5.32",

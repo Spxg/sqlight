@@ -15,6 +15,12 @@ pub enum WorkerError {
     OpfsSAHPoolOpened,
     #[error("Commit or roll back the current transaction before switching database settings")]
     ActiveTransaction,
+    #[error("Database file does not exist: {0}")]
+    MissingDatabase(String),
+    #[error("Files are open in the SQL connection: {0:?}")]
+    FilesInUse(Vec<String>),
+    #[error("Filesystem operation failed: {0}")]
+    Filesystem(String),
     #[error("Failed to load db: {0}")]
     LoadDb(String),
     #[error("Failed to create db: {0}")]
@@ -36,9 +42,14 @@ pub enum WorkerRequest {
     LoadDb(LoadDbOptions),
     LoadDbs(LoadDbsOptions),
     CreateDb(String),
+    CreateScratch(String),
+    BootstrapDefault,
     ListDbs,
+    ListFiles,
+    DeleteFiles(Vec<String>),
     DownloadDb,
     DownloadFile(String),
+    DownloadBundle(Vec<String>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,8 +62,33 @@ pub enum WorkerResponse {
     LoadDb(Result<()>),
     LoadDbs(Result<Vec<String>>),
     CreateDb(Result<String>),
+    CreateScratch(Result<String>),
+    BootstrapDefault(Result<()>),
     ListDbs(Result<Vec<String>>),
+    ListFiles(Result<FileSnapshot>),
+    DeleteFiles(Result<Vec<String>>),
     DownloadDb(Result<DownloadDbResponse>),
+    DownloadBundle(Result<DownloadBundleResponse>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FileInfo {
+    pub filename: String,
+    pub size: u64,
+    pub in_use: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FileSnapshot {
+    pub files: Vec<FileInfo>,
+    pub connection: Option<OpenOptions>,
+    pub in_transaction: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DownloadBundleResponse {
+    pub filename: String,
+    pub files: Vec<DatabaseFile>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

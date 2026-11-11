@@ -8,11 +8,11 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
 use crate::{
-    OpenOptions, SQLightError, SQLiteRunResult, SendWrapper, WorkerError, WorkerRequest,
-    WorkerResponse,
+    FileSnapshot, OpenOptions, SQLightError, SQLiteRunResult, SendWrapper, WorkerError,
+    WorkerRequest, WorkerResponse,
     app::{
         Engine, Exported, Focus, GlobalState, GlobalStateStoreFields, change_focus,
-        embed_query_result,
+        embed_query_result, use_database,
     },
 };
 
@@ -80,18 +80,12 @@ impl WorkerSession {
         if self.opened.as_ref() == Some(&options) {
             return Ok(());
         }
-        let previous = self.opened.take();
         match self.request(WorkerRequest::Open(options.clone())).await? {
             WorkerResponse::Open(Ok(())) => {
                 self.opened = Some(options);
                 Ok(())
             }
-            WorkerResponse::Open(Err(error)) => {
-                if matches!(error, WorkerError::ActiveTransaction) {
-                    self.opened = previous;
-                }
-                Err(error)
-            }
+            WorkerResponse::Open(Err(error)) => Err(error),
             _ => Err(WorkerError::Unexpected),
         }
     }
@@ -110,6 +104,14 @@ fn transport_error(error: wasm_bindgen::JsValue) -> WorkerError {
 }
 
 pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
+    dispatch(state, request, false);
+}
+
+pub(crate) fn send_create_and_use(state: Store<GlobalState>, filename: String) {
+    dispatch(state, WorkerRequest::CreateDb(filename), true);
+}
+
+fn dispatch(state: Store<GlobalState>, request: WorkerRequest, create_and_use: bool) {
     let running = matches!(request, WorkerRequest::Run(_));
     let importing = matches!(
         request,
@@ -122,7 +124,7 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
     if running {
         state.is_running().set(true);
     }
-    if !matches!(request, WorkerRequest::ListDbs) {
+    if !matches!(request, WorkerRequest::ListDbs | WorkerRequest::ListFiles) {
         state.last_error().set(None);
     }
 
@@ -130,8 +132,15 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
         WorkerRequest::Run(options) if options.embed => Some(options.sql.clone()),
         _ => None,
     };
+    let needs_connection = running
+        || matches!(
+            request,
+            WorkerRequest::LoadDb(_) | WorkerRequest::DownloadDb
+        );
+    let listing = matches!(request, WorkerRequest::ListFiles);
     let workspace = state.workspace_id().get_untracked();
     let engine = state.engine().get_untracked();
+    let pending_database = state.pending_database().get_untracked();
     let options = OpenOptions {
         filename: state.with_untracked(GlobalState::database_filename),
         read_only: state.read_only().get_untracked(),
@@ -147,51 +156,99 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
 
     spawn_local(async move {
         let mut session = session.lock().await;
+        let mut initialized = false;
         let response = async {
             if session.is_none() {
                 *session = Some(WorkerSession::start(uri).await?);
             }
             let worker = session.as_mut().unwrap();
-            worker.connect(options).await?;
+            if running && (options.filename == "default.db" || pending_database) {
+                let initialization = if options.filename == "default.db" {
+                    WorkerRequest::BootstrapDefault
+                } else {
+                    WorkerRequest::CreateScratch(options.filename.clone())
+                };
+                match worker.request(initialization).await? {
+                    WorkerResponse::BootstrapDefault(result) => {
+                        initialized = result.is_ok()
+                            || matches!(result, Err(WorkerError::MissingDatabase(_)));
+                        result?;
+                    }
+                    WorkerResponse::CreateScratch(result) => {
+                        initialized = result.is_ok()
+                            || matches!(result, Err(WorkerError::MissingDatabase(_)));
+                        result?;
+                    }
+                    _ => return Err(WorkerError::Unexpected),
+                }
+            }
+            if needs_connection {
+                worker.connect(options).await?;
+            }
             worker.request(request).await
         }
         .await;
 
+        // The filesystem snapshot also supplies the actual connection after an import,
+        // failed switch, Fresh run, or explicit disconnect.
+        let snapshot = if !listing
+            && !matches!(response, Err(WorkerError::Transport(_)))
+            && let Some(worker) = session.as_mut()
+        {
+            match worker.request(WorkerRequest::ListFiles).await {
+                Ok(WorkerResponse::ListFiles(Ok(snapshot))) => {
+                    worker.opened = snapshot.connection.clone();
+                    Some(snapshot)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         if matches!(response, Err(WorkerError::Transport(_))) {
             *session = None;
         }
-        if state.workspace_id().get_untracked() != workspace {
-            return;
-        }
-        if matches!(
-            response,
-            Err(WorkerError::ActiveTransaction)
-                | Ok(WorkerResponse::LoadDb(Err(WorkerError::ActiveTransaction)))
-                | Ok(WorkerResponse::LoadDbs(Err(WorkerError::ActiveTransaction)))
-                | Ok(WorkerResponse::CreateDb(Err(
-                    WorkerError::ActiveTransaction
-                )))
-        ) && let Some(options) = session.as_ref().and_then(|worker| worker.opened.as_ref())
+        if state.workspace_id().get_untracked() == workspace
+            && state.engine().get_untracked() == engine
         {
-            batch(move || {
-                state.database().set(options.filename.clone());
-                state.read_only().set(options.read_only);
-                state.keep_ctx().set(true);
-            });
-        }
-        match response {
-            Ok(response) => handle_response(state, response, embed_sql.as_deref()),
-            Err(error) => {
-                if importing {
-                    state.import_progress().update(|progress| {
-                        if let Some(progress) = progress {
-                            progress.opened = Some(false);
-                        }
-                    });
+            if initialized {
+                state.pending_database().set(false);
+                state.read_untracked().save();
+            }
+            if let Some(snapshot) = snapshot {
+                apply_snapshot(state, snapshot);
+            }
+            if needs_connection
+                && matches!(response, Err(WorkerError::ActiveTransaction))
+                && let Some(options) = session.as_ref().and_then(|worker| worker.opened.as_ref())
+            {
+                batch(move || {
+                    state.database().set(options.filename.clone());
+                    state.pending_database().set(false);
+                    state.read_only().set(options.read_only);
+                    state.keep_ctx().set(true);
+                });
+                state.read_untracked().save();
+            }
+            match response {
+                Ok(response) => {
+                    if create_and_use && let WorkerResponse::CreateDb(Ok(filename)) = &response {
+                        use_database(state, filename.clone());
+                    }
+                    handle_response(state, response, embed_sql.as_deref()).await;
                 }
-                state
-                    .last_error()
-                    .set(Some(SQLightError::new_worker(error)));
+                Err(error) => {
+                    if importing {
+                        state.import_progress().update(|progress| {
+                            if let Some(progress) = progress {
+                                progress.opened = Some(false);
+                            }
+                        });
+                    }
+                    state
+                        .last_error()
+                        .set(Some(SQLightError::new_worker(error)));
+                }
             }
         }
         batch(move || {
@@ -203,7 +260,28 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
     });
 }
 
-fn handle_response(state: Store<GlobalState>, response: WorkerResponse, embed_sql: Option<&str>) {
+fn apply_snapshot(state: Store<GlobalState>, snapshot: FileSnapshot) {
+    let databases = snapshot
+        .files
+        .iter()
+        .filter(|file| {
+            !["-journal", "-wal", "-shm"]
+                .iter()
+                .any(|suffix| file.filename.ends_with(suffix))
+        })
+        .map(|file| file.filename.clone())
+        .collect();
+    batch(move || {
+        state.databases().set(databases);
+        state.files().set(Some(snapshot));
+    });
+}
+
+async fn handle_response(
+    state: Store<GlobalState>,
+    response: WorkerResponse,
+    embed_sql: Option<&str>,
+) {
     match response {
         WorkerResponse::Run(result) => match result {
             Ok(SQLiteRunResult {
@@ -279,34 +357,67 @@ fn handle_response(state: Store<GlobalState>, response: WorkerResponse, embed_sq
                 .last_error()
                 .set(Some(SQLightError::new_worker(error))),
         },
-        WorkerResponse::CreateDb(result) => match result {
-            Ok(filename) => batch(move || {
-                state.database().set(filename.clone());
-                state.keep_ctx().set(true);
-                state.databases().update(|databases| {
-                    if !databases.contains(&filename) {
-                        databases.push(filename);
-                        databases.sort();
-                    }
-                });
-            }),
+        WorkerResponse::ListFiles(result) => match result {
+            Ok(snapshot) => apply_snapshot(state, snapshot),
             Err(error) => state
                 .last_error()
                 .set(Some(SQLightError::new_worker(error))),
         },
+        WorkerResponse::CreateDb(result) | WorkerResponse::CreateScratch(result) => {
+            if let Err(error) = result {
+                state
+                    .last_error()
+                    .set(Some(SQLightError::new_worker(error)));
+            }
+        }
+        WorkerResponse::DeleteFiles(result) => match result {
+            Ok(deleted) => {
+                if deleted.contains(&state.database().get_untracked()) {
+                    state.pending_database().set(false);
+                }
+                state.read_untracked().save();
+            }
+            Err(error) => state
+                .last_error()
+                .set(Some(SQLightError::new_worker(error))),
+        },
+        WorkerResponse::Close(result) | WorkerResponse::BootstrapDefault(result) => {
+            if let Err(error) = result {
+                state
+                    .last_error()
+                    .set(Some(SQLightError::new_worker(error)));
+            }
+        }
         WorkerResponse::DownloadDb(result) => match result {
             Ok(response) => {
                 state.exported().set(Some(Exported {
                     filename: response.filename,
+                    mime_type: "application/vnd.sqlite3",
                     data: SendWrapper::new(response.data),
                 }));
             }
             Err(err) => state.last_error().set(Some(SQLightError::new_worker(err))),
         },
-        WorkerResponse::Open(_)
-        | WorkerResponse::Close(_)
-        | WorkerResponse::CloseWorkspace(_)
-        | WorkerResponse::Ready => {
+        WorkerResponse::DownloadBundle(result) => match result {
+            Ok(response) => match crate::archive::pack_zip(&response.files).await {
+                Ok(data) => state.exported().set(Some(Exported {
+                    filename: response.filename,
+                    mime_type: "application/zip",
+                    data: SendWrapper::new(data),
+                })),
+                Err(error) => {
+                    state
+                        .last_error()
+                        .set(Some(SendWrapper::new(SQLightError::ExportDb(format!(
+                            "{error:?}"
+                        )))))
+                }
+            },
+            Err(error) => state
+                .last_error()
+                .set(Some(SQLightError::new_worker(error))),
+        },
+        WorkerResponse::Open(_) | WorkerResponse::CloseWorkspace(_) | WorkerResponse::Ready => {
             unreachable!()
         }
     }

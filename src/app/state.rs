@@ -6,7 +6,7 @@ use leptos::tachys::dom::window;
 use reactive_stores::Store;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{SQLightError, SQLiteStatementResult, SendWrapper};
+use crate::{FileSnapshot, SQLightError, SQLiteStatementResult, SendWrapper};
 
 const DEFAULT_SQL: &str = include_str!("default.sql");
 const NEW_WORKSPACE_SQL: &str =
@@ -21,6 +21,8 @@ pub struct GlobalState {
     deleted_workspace_ids: Vec<String>,
     #[serde(default)]
     database: String,
+    #[serde(default)]
+    pending_database: bool,
     editor_config: EditorConfig,
     orientation: Orientation,
     theme: Theme,
@@ -41,6 +43,10 @@ pub struct GlobalState {
     is_busy: bool,
     #[serde(skip)]
     databases: Vec<String>,
+    #[serde(skip)]
+    files: Option<FileSnapshot>,
+    #[serde(skip)]
+    files_open: bool,
     #[serde(skip)]
     opened_focus: HashSet<Focus>,
     #[serde(skip)]
@@ -65,6 +71,7 @@ impl Default for GlobalState {
             workspaces: vec![],
             deleted_workspace_ids: vec![],
             database: "default.db".into(),
+            pending_database: false,
             editor_config: EditorConfig::default(),
             orientation: Orientation::Automatic,
             theme: Theme::System,
@@ -78,6 +85,8 @@ impl Default for GlobalState {
             is_running: false,
             is_busy: false,
             databases: vec![],
+            files: None,
+            files_open: false,
             opened_focus: HashSet::new(),
             share_href: None,
             show_something: false,
@@ -94,6 +103,7 @@ impl GlobalState {
         std::mem::swap(&mut self.workspace_id, &mut workspace.id);
         std::mem::swap(&mut self.workspace_name, &mut workspace.name);
         std::mem::swap(&mut self.database, &mut workspace.database);
+        std::mem::swap(&mut self.pending_database, &mut workspace.pending_database);
         std::mem::swap(&mut self.sql, &mut workspace.sql);
         std::mem::swap(&mut self.engine, &mut workspace.engine);
         std::mem::swap(&mut self.keep_ctx, &mut workspace.keep_ctx);
@@ -119,6 +129,7 @@ impl GlobalState {
     pub fn create_workspace(&mut self, id: String, name: String) {
         let mut workspace = Workspace {
             database: self.database.clone(),
+            pending_database: self.pending_database,
             id,
             name,
             sql: NEW_WORKSPACE_SQL.into(),
@@ -143,6 +154,7 @@ impl GlobalState {
             id: saved.workspace_id,
             name: saved.workspace_name,
             database: saved.database,
+            pending_database: saved.pending_database,
             sql: saved.sql,
             engine: saved.engine,
             keep_ctx: saved.keep_ctx,
@@ -188,6 +200,7 @@ impl GlobalState {
             id: self.workspace_id.clone(),
             name: self.workspace_name.clone(),
             database: self.database.clone(),
+            pending_database: self.pending_database,
             sql: self.sql.clone(),
             engine: self.engine,
             keep_ctx: self.keep_ctx,
@@ -288,6 +301,8 @@ pub struct Workspace {
     pub name: String,
     #[serde(default)]
     pub database: String,
+    #[serde(default)]
+    pub pending_database: bool,
     pub sql: String,
     pub engine: Engine,
     pub keep_ctx: bool,
@@ -304,6 +319,7 @@ pub struct ImportProgress {
 
 pub struct Exported {
     pub filename: String,
+    pub mime_type: &'static str,
     pub data: SendWrapper<Uint8Array>,
 }
 

@@ -2,8 +2,8 @@ mod button_menu_item;
 mod button_set;
 mod config_element;
 mod config_menu;
-mod database_menu;
 mod editor;
+mod files;
 mod header;
 mod icon;
 mod loader;
@@ -23,5 +23,5 @@ pub use playground::Playground;
 pub(crate) use playground::embed_query_result;
 pub use state::*;
 pub(crate) use workspace_actions::{
-    delete_workspace, new_workspace, rename_workspace, switch_workspace,
+    delete_workspace, new_workspace, rename_workspace, switch_workspace, use_database,
 };

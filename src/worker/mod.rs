@@ -1,18 +1,20 @@
+mod metadata;
 mod raw_file;
 mod sqlitend;
 
 use std::collections::HashSet;
 
 use crate::{
-    DatabaseFile, DownloadDbResponse, LoadDbOptions, LoadDbsOptions, OpenOptions, RunOptions,
-    SQLiteRunResult, WorkerError, WorkerRequest, WorkerResponse,
+    DatabaseFile, DownloadBundleResponse, DownloadDbResponse, FileInfo, FileSnapshot,
+    LoadDbOptions, LoadDbsOptions, OpenOptions, RunOptions, SQLiteRunResult, WorkerError,
+    WorkerRequest, WorkerResponse,
 };
 use js_sys::Uint8Array;
 use sqlite_wasm_rs::{
     WasmOsCallback,
     vfs::{VfsFilesManager, transfer::DbTransfer},
 };
-use sqlite_wasm_vfs::sahpool::{OpfsSAHError, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
+use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
 use tokio::sync::mpsc;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
@@ -36,13 +38,13 @@ const OPFS_VFS_DIR: &str = if cfg!(feature = "sqlite3mc") {
     "sqlight-sahpool"
 };
 
-fn uri(options: &OpenOptions) -> String {
-    let filename = String::from(js_sys::encode_uri_component(&options.filename));
+fn uri(filename: &str) -> String {
+    let filename = String::from(js_sys::encode_uri_component(filename));
     format!("file:{filename}?vfs={OPFS_VFS}")
 }
 
-fn initialize_empty_db(options: &OpenOptions) -> Result<()> {
-    let db = SQLiteDb::open(&uri(options), false)?;
+fn initialize_empty_db(filename: &str) -> Result<()> {
+    let db = SQLiteDb::open(&uri(filename), false)?;
     db.prepare("PRAGMA user_version = 0;")?
         .results(&mut Vec::new())?;
     Ok(())
@@ -73,8 +75,19 @@ impl SQLiteWorker {
             return Ok(());
         }
         self.ensure_autocommit()?;
+        self.ensure_fs().await?;
+        if !self.contains(&options.filename)? {
+            return Err(WorkerError::MissingDatabase(options.filename));
+        }
+        self.reserve_opfs(3).await?;
         self.db = None;
         self.options = None;
+        self.db = Some(SQLiteDb::open(&uri(&options.filename), options.read_only)?);
+        self.options = Some(options);
+        Ok(())
+    }
+
+    async fn ensure_fs(&mut self) -> Result<()> {
         if self.opfs.is_none() {
             self.opfs = Some(
                 sqlite_wasm_vfs::sahpool::install::<WasmOsCallback>(
@@ -94,26 +107,12 @@ impl SQLiteWorker {
             .resume()
             .await
             .map_err(|_| WorkerError::OpfsSAHPoolOpened)?;
-        self.reserve_opfs(3).await?;
-        if options.read_only {
-            let exists = self
-                .opfs
-                .as_ref()
-                .unwrap()
-                .contains(&options.filename)
-                .map_err(|_| WorkerError::Unexpected)?;
-            if !exists {
-                initialize_empty_db(&options)?;
-            }
-        }
-        self.db = Some(SQLiteDb::open(&uri(&options), options.read_only)?);
-        self.options = Some(options);
         Ok(())
     }
 
     fn reopen(&mut self) -> Result<()> {
         let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
-        self.db = Some(SQLiteDb::open(&uri(options), options.read_only)?);
+        self.db = Some(SQLiteDb::open(&uri(&options.filename), options.read_only)?);
         Ok(())
     }
 
@@ -125,6 +124,7 @@ impl SQLiteWorker {
     }
 
     fn close(&mut self) -> Result<()> {
+        self.ensure_autocommit()?;
         self.db = None;
         self.options = None;
         if let Some(opfs) = &self.opfs {
@@ -145,26 +145,24 @@ impl SQLiteWorker {
     }
 
     fn contains(&self, filename: &str) -> Result<bool> {
-        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         self.opfs
             .as_ref()
             .unwrap()
             .contains(filename)
-            .map_err(|error| WorkerError::LoadDb(error.to_string()))
+            .map_err(|error| WorkerError::Filesystem(error.to_string()))
     }
 
     async fn reserve_opfs(&self, additional: usize) -> Result<()> {
         let opfs = self.opfs.as_ref().unwrap();
         let count = opfs
             .len()
-            .map_err(|error| WorkerError::LoadDb(error.to_string()))?;
+            .map_err(|error| WorkerError::Filesystem(error.to_string()))?;
         opfs.ensure_capacity(count + additional)
             .await
-            .map_err(|error| WorkerError::LoadDb(error.to_string()))
+            .map_err(|error| WorkerError::Filesystem(error.to_string()))
     }
 
     fn remove_files(&self, filename: &str) -> Result<()> {
-        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         for suffix in ["-journal", "-wal", "-shm", ""] {
             let name = format!("{filename}{suffix}");
             self.opfs
@@ -202,7 +200,13 @@ impl SQLiteWorker {
             self.remove_db()?;
             let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
             if options.read_only {
-                initialize_empty_db(options)?;
+                initialize_empty_db(&options.filename)?;
+            } else {
+                self.opfs
+                    .as_ref()
+                    .unwrap()
+                    .import_db_unchecked(&options.filename, &[])
+                    .map_err(|error| WorkerError::Filesystem(error.to_string()))?;
             }
             self.reopen()?;
         }
@@ -235,17 +239,13 @@ impl SQLiteWorker {
     }
 
     async fn load_dbs(&mut self, options: LoadDbsOptions) -> Result<Vec<String>> {
+        self.ensure_fs().await?;
         self.ensure_autocommit()?;
-        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         let mut names = HashSet::new();
+        let mut databases = Vec::new();
         let mut files = Vec::new();
         for file in options.files {
             validate_filename(&file.filename).map_err(WorkerError::LoadDb)?;
-            if is_sidecar(&file.filename) {
-                return Err(WorkerError::LoadDb(
-                    "Upload main database files, without journal or WAL suffixes".into(),
-                ));
-            }
             if !names.insert(file.filename.clone()) {
                 return Err(WorkerError::LoadDb(format!(
                     "Duplicate database name: {}",
@@ -253,38 +253,67 @@ impl SQLiteWorker {
                 )));
             }
             let data = file.data.to_vec();
-            validate_import_db(&data)
-                .map_err(|error| WorkerError::LoadDb(format!("{}: {error}", file.filename)))?;
+            if !is_sidecar(&file.filename) {
+                validate_import_db(&data)
+                    .map_err(|error| WorkerError::LoadDb(format!("{}: {error}", file.filename)))?;
+                databases.push(file.filename.clone());
+            } else if file.filename.ends_with("-journal") && has_super_journal(&data) {
+                return Err(WorkerError::LoadDb(
+                    "This journal references a super-journal from a multi-database transaction; \
+                    import a recovered database instead"
+                        .into(),
+                ));
+            }
+            files.push((file.filename, data));
+        }
+        for (filename, _) in &files {
+            if let Some(database) = sidecar_database(filename)
+                && !databases.iter().any(|name| name == database)
+            {
+                return Err(WorkerError::LoadDb(format!(
+                    "Missing main database for sidecar: {filename}"
+                )));
+            }
+        }
+        for database in &databases {
             if !options.replace {
                 for suffix in ["", "-journal", "-wal", "-shm"] {
-                    if self.contains(&format!("{}{suffix}", file.filename))? {
+                    if self.contains(&format!("{database}{suffix}"))? {
                         return Err(WorkerError::LoadDb(format!(
-                            "Database already exists: {}",
-                            file.filename
+                            "Database already exists: {database}"
                         )));
                     }
                 }
             }
-            files.push((file.filename, data));
         }
         self.reserve_opfs(files.len() + 3).await?;
         let reconnect = self.db.as_ref().is_some_and(|db| {
-            files
-                .iter()
-                .any(|(filename, _)| db.uses_file(filename, OPFS_VFS))
+            options.replace
+                && databases.iter().any(|database| {
+                    ["", "-journal", "-wal", "-shm"]
+                        .iter()
+                        .any(|suffix| db.uses_file(&format!("{database}{suffix}"), OPFS_VFS))
+                })
         });
         if reconnect {
             self.db = None;
         }
         let result = (|| {
-            for (filename, data) in &files {
-                if options.replace {
-                    self.remove_files(filename)?;
+            if options.replace {
+                for database in &databases {
+                    self.remove_files(database)?;
                 }
-                import_db(self.opfs.as_ref().unwrap(), filename, data)
+            }
+            // Importing a main file after its sidecars is rejected by the VFS.
+            files.sort_by_key(|(filename, _)| is_sidecar(filename));
+            for (filename, data) in &files {
+                self.opfs
+                    .as_ref()
+                    .unwrap()
+                    .import_db_unchecked(filename, data)
                     .map_err(|error| WorkerError::LoadDb(error.to_string()))?;
             }
-            Ok(files.into_iter().map(|(filename, _)| filename).collect())
+            Ok(databases)
         })();
         if reconnect {
             self.reopen()?;
@@ -292,8 +321,8 @@ impl SQLiteWorker {
         result
     }
 
-    async fn create_db(&self, filename: String) -> Result<String> {
-        self.ensure_autocommit()?;
+    async fn create_db(&mut self, filename: String) -> Result<String> {
+        self.ensure_fs().await?;
         validate_filename(&filename).map_err(WorkerError::CreateDb)?;
         if is_sidecar(&filename) {
             return Err(WorkerError::CreateDb(
@@ -308,18 +337,147 @@ impl SQLiteWorker {
             }
         }
         self.reserve_opfs(3).await?;
-        let mut options = self.options.as_ref().ok_or(WorkerError::NotOpened)?.clone();
-        options.filename = filename.clone();
         // The active connection keeps its key and SQL state while only the new file is opened.
-        if let Err(error) = initialize_empty_db(&options) {
+        let initialized = if cfg!(any(feature = "sqlite3mc", feature = "sqlcipher")) {
+            self.opfs
+                .as_ref()
+                .unwrap()
+                .import_db_unchecked(&filename, &[])
+                .map_err(|error| WorkerError::Filesystem(error.to_string()))
+        } else {
+            initialize_empty_db(&filename)
+        };
+        if let Err(error) = initialized {
             self.remove_files(&filename)?;
             return Err(WorkerError::CreateDb(error.to_string()));
         }
         Ok(filename)
     }
 
-    fn list_dbs(&self) -> Result<Vec<String>> {
-        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+    async fn create_scratch(&mut self, filename: String) -> Result<String> {
+        validate_filename(&filename).map_err(WorkerError::CreateDb)?;
+        if is_sidecar(&filename) {
+            return Err(WorkerError::CreateDb(
+                "Choose a main database filename".into(),
+            ));
+        }
+        self.ensure_fs().await?;
+        if self.contains(&filename)? {
+            return Ok(filename);
+        }
+        if metadata::initialized(&filename, false).await? {
+            return Err(WorkerError::MissingDatabase(filename));
+        }
+        for suffix in ["-journal", "-wal", "-shm"] {
+            if self.contains(&format!("{filename}{suffix}"))? {
+                return Err(WorkerError::CreateDb(format!(
+                    "A log file already exists for {filename}"
+                )));
+            }
+        }
+        self.reserve_opfs(3).await?;
+        self.opfs
+            .as_ref()
+            .unwrap()
+            .import_db_unchecked(&filename, &[])
+            .map_err(|error| WorkerError::Filesystem(error.to_string()))?;
+        metadata::initialized(&filename, true).await?;
+        Ok(filename)
+    }
+
+    async fn bootstrap_default(&mut self) -> Result<()> {
+        self.create_scratch("default.db".into()).await.map(|_| ())
+    }
+
+    fn file_in_use(&self, filename: &str) -> bool {
+        self.db.as_ref().is_some_and(|db| {
+            db.uses_file(filename, OPFS_VFS)
+                || sidecar_database(filename).is_some_and(|main| db.uses_file(main, OPFS_VFS))
+        })
+    }
+
+    async fn list_files(&mut self) -> Result<FileSnapshot> {
+        self.ensure_fs().await?;
+        let mut names = self
+            .opfs
+            .as_ref()
+            .unwrap()
+            .names()
+            .map_err(|error| WorkerError::Filesystem(error.to_string()))?;
+        names.sort();
+        let mut files = Vec::new();
+        for filename in names {
+            files.push(FileInfo {
+                size: ReadOnlyFile::open(&filename)?.len()?,
+                in_use: self.file_in_use(&filename),
+                filename,
+            });
+        }
+        Ok(FileSnapshot {
+            files,
+            connection: if self.db.is_some() {
+                self.options.clone()
+            } else {
+                None
+            },
+            in_transaction: self.db.as_ref().is_some_and(|db| !db.is_autocommit()),
+        })
+    }
+
+    async fn delete_files(&mut self, filenames: Vec<String>) -> Result<Vec<String>> {
+        self.ensure_fs().await?;
+        self.ensure_autocommit()?;
+        let mut selected = HashSet::new();
+        for filename in filenames {
+            validate_filename(&filename).map_err(WorkerError::Filesystem)?;
+            if !self.contains(&filename)? {
+                return Err(WorkerError::MissingDatabase(filename));
+            }
+            if let Some(main) = sidecar_database(&filename)
+                && !self.contains(main)?
+            {
+                selected.insert(filename);
+                continue;
+            }
+            let main = sidecar_database(&filename).unwrap_or(&filename);
+            for suffix in ["", "-journal", "-wal", "-shm"] {
+                let name = format!("{main}{suffix}");
+                if self.contains(&name)? {
+                    selected.insert(name);
+                }
+            }
+        }
+        let mut selected: Vec<_> = selected.into_iter().collect();
+        selected.sort();
+        let in_use: Vec<_> = selected
+            .iter()
+            .filter(|name| self.file_in_use(name))
+            .cloned()
+            .collect();
+        if !in_use.is_empty() {
+            return Err(WorkerError::FilesInUse(in_use));
+        }
+        let initialized: HashSet<_> = selected
+            .iter()
+            .map(|name| sidecar_database(name).unwrap_or(name))
+            .collect();
+        for filename in initialized {
+            metadata::initialized(filename, true).await?;
+        }
+        // Remove main files first, leaving only orphan logs if cleanup fails.
+        selected.sort_by_key(|name| is_sidecar(name));
+        for filename in &selected {
+            self.opfs
+                .as_ref()
+                .unwrap()
+                .remove(filename)
+                .map_err(|error| WorkerError::Filesystem(error.to_string()))?;
+        }
+        Ok(selected)
+    }
+
+    async fn list_dbs(&mut self) -> Result<Vec<String>> {
+        self.ensure_fs().await?;
         let mut names = self
             .opfs
             .as_ref()
@@ -331,7 +489,8 @@ impl SQLiteWorker {
         Ok(names)
     }
 
-    fn download_db(&mut self) -> Result<DownloadDbResponse> {
+    async fn download_db(&mut self) -> Result<DownloadDbResponse> {
+        self.ensure_fs().await?;
         if let Some(db) = &self.db
             && !db.is_autocommit()
         {
@@ -359,9 +518,12 @@ impl SQLiteWorker {
         })
     }
 
-    fn download_file(&self, filename: &str) -> Result<DownloadDbResponse> {
+    async fn download_file(&mut self, filename: &str) -> Result<DownloadDbResponse> {
+        self.ensure_fs().await?;
         validate_filename(filename).map_err(WorkerError::DownloadDb)?;
-        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        if !self.contains(filename)? {
+            return Err(WorkerError::MissingDatabase(filename.into()));
+        }
         if let Some(db) = &self.db
             && let Some((schema, read_only)) = db.file_schema(filename, OPFS_VFS)
         {
@@ -382,7 +544,6 @@ impl SQLiteWorker {
     }
 
     fn download_raw(&self, filename: &str) -> Result<DownloadDbResponse> {
-        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         // This worker executes one request at a time. Reading the base VFS keeps
         // the current SQLite connection and cipher state intact.
         for suffix in ["-journal", "-wal"] {
@@ -407,6 +568,76 @@ impl SQLiteWorker {
         Ok(DownloadDbResponse {
             filename: filename.into(),
             data: Uint8Array::new_from_slice(&file.read_all()?),
+        })
+    }
+
+    async fn download_bundle(&mut self, databases: Vec<String>) -> Result<DownloadBundleResponse> {
+        self.ensure_fs().await?;
+        if databases.is_empty() {
+            return Err(WorkerError::DownloadDb(
+                "Choose at least one database".into(),
+            ));
+        }
+        let mut selected = HashSet::new();
+        let mut names = Vec::new();
+        for database in &databases {
+            validate_filename(database).map_err(WorkerError::DownloadDb)?;
+            if !self.contains(database)? {
+                return Err(WorkerError::MissingDatabase(database.clone()));
+            }
+            if !selected.insert(database) {
+                return Err(WorkerError::DownloadDb("Choose each file once".into()));
+            }
+            if let Some(main) = sidecar_database(database) {
+                if !self.contains(main)? {
+                    names.push(database.clone());
+                    continue;
+                }
+                return Err(WorkerError::DownloadDb(
+                    "Choose the main database to include its log files".into(),
+                ));
+            }
+            names.push(database.clone());
+            for suffix in ["-journal", "-wal", "-shm"] {
+                let filename = format!("{database}{suffix}");
+                if self.contains(&filename)? {
+                    names.push(filename);
+                }
+            }
+        }
+        if let Some(db) = &self.db
+            && !db.is_autocommit()
+            && names.iter().any(|name| db.uses_file(name, OPFS_VFS))
+        {
+            return Err(WorkerError::DownloadDb(
+                "Commit or roll back the current transaction before downloading these databases"
+                    .into(),
+            ));
+        }
+        let mut files = Vec::new();
+        // The worker runs requests serially and owns the OPFS pool exclusively.
+        // Copy every file synchronously so no transaction can change this bundle.
+        for filename in names {
+            let data = ReadOnlyFile::open(&filename)?.read_all()?;
+            if filename.ends_with("-journal") && has_super_journal(&data) {
+                return Err(WorkerError::DownloadDb(
+                    "This journal references a super-journal from a multi-database transaction; \
+                    recover the database before downloading"
+                        .into(),
+                ));
+            }
+            files.push(DatabaseFile {
+                filename,
+                data: Uint8Array::new_from_slice(&data),
+            });
+        }
+        Ok(DownloadBundleResponse {
+            filename: if databases.len() == 1 {
+                format!("{}.zip", databases[0])
+            } else {
+                "databases.zip".into()
+            },
+            files,
         })
     }
 }
@@ -438,26 +669,15 @@ fn export_db(vfs: &OpfsSAHPoolUtil, filename: &str) -> Result<Vec<u8>> {
     vfs.export_db(filename).map_err(error)
 }
 
-fn import_db(
-    vfs: &OpfsSAHPoolUtil,
-    filename: &str,
-    db: &[u8],
-) -> std::result::Result<(), OpfsSAHError> {
-    #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
-    {
-        vfs.import_db(filename, db)
-    }
-    #[cfg(any(feature = "sqlite3mc", feature = "sqlcipher"))]
-    {
-        vfs.import_db_unchecked(filename, db)
-    }
-}
-
 fn validate_import_db(
     db: &[u8],
 ) -> std::result::Result<(), sqlite_wasm_rs::vfs::transfer::ImportDbError> {
     use sqlite_wasm_rs::vfs::transfer::ImportDbError;
 
+    // SQLite creates a zero-byte file until its first database write.
+    if db.is_empty() {
+        return Ok(());
+    }
     // Validate before replacing the current database.
     if db.len() < 512 || !db.len().is_multiple_of(512) {
         return Err(ImportDbError::InvalidDbSize);
@@ -492,9 +712,33 @@ fn validate_filename(filename: &str) -> std::result::Result<(), String> {
 }
 
 fn is_sidecar(filename: &str) -> bool {
+    sidecar_database(filename).is_some()
+}
+
+fn sidecar_database(filename: &str) -> Option<&str> {
     ["-journal", "-wal", "-shm"]
         .iter()
-        .any(|suffix| filename.ends_with(suffix))
+        .find_map(|suffix| filename.strip_suffix(suffix))
+}
+
+fn has_super_journal(data: &[u8]) -> bool {
+    const MAGIC: &[u8] = &[0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+    if data.len() < 16 || data.first() == Some(&0) || !data.ends_with(MAGIC) {
+        return false;
+    }
+    let footer = data.len() - 16;
+    let length = u32::from_be_bytes(data[footer..footer + 4].try_into().unwrap()) as usize;
+    if length == 0 || length > footer {
+        return false;
+    }
+    let checksum = u32::from_be_bytes(data[footer + 4..footer + 8].try_into().unwrap());
+    data[footer - length..footer]
+        .iter()
+        // SQLite's journal checksum treats filename bytes as signed octets.
+        .fold(0u32, |sum, byte| {
+            sum.wrapping_add(i32::from(*byte as i8) as u32)
+        })
+        == checksum
 }
 
 async fn execute_tasks(
@@ -518,10 +762,23 @@ async fn execute_tasks(
             WorkerRequest::CreateDb(filename) => {
                 WorkerResponse::CreateDb(worker.create_db(filename).await)
             }
-            WorkerRequest::ListDbs => WorkerResponse::ListDbs(worker.list_dbs()),
-            WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(worker.download_db()),
+            WorkerRequest::CreateScratch(filename) => {
+                WorkerResponse::CreateScratch(worker.create_scratch(filename).await)
+            }
+            WorkerRequest::BootstrapDefault => {
+                WorkerResponse::BootstrapDefault(worker.bootstrap_default().await)
+            }
+            WorkerRequest::ListDbs => WorkerResponse::ListDbs(worker.list_dbs().await),
+            WorkerRequest::ListFiles => WorkerResponse::ListFiles(worker.list_files().await),
+            WorkerRequest::DeleteFiles(filenames) => {
+                WorkerResponse::DeleteFiles(worker.delete_files(filenames).await)
+            }
+            WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(worker.download_db().await),
             WorkerRequest::DownloadFile(filename) => {
-                WorkerResponse::DownloadDb(worker.download_file(&filename))
+                WorkerResponse::DownloadDb(worker.download_file(&filename).await)
+            }
+            WorkerRequest::DownloadBundle(filenames) => {
+                WorkerResponse::DownloadBundle(worker.download_bundle(filenames).await)
             }
         };
         post_response(&scope, response);

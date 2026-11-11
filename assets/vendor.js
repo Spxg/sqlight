@@ -12,8 +12,14 @@ import 'ace-builds/src-noconflict/keybinding-vim';
 import 'ace-builds/src-noconflict/keybinding-vscode';
 import * as FloatingUIDOM from '@floating-ui/dom';
 import Split from 'split-grid';
+import { packZip, unpackZip } from './database-archive';
 import './vendor.css';
 
 // Keep the globals used by the Rust bindings. Every editor mode, theme and
 // keybinding exposed in the settings menu is bundled above.
-Object.assign(globalThis, { ace, FloatingUIDOM, Split });
+Object.assign(globalThis, {
+  ace,
+  FloatingUIDOM,
+  Split,
+  SQLightArchive: { packZip, unpackZip },
+});
