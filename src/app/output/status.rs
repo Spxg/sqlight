@@ -22,10 +22,17 @@ fn error_details(error: &SQLightError) -> &'static str {
                 {
                     "Check the SQLite engine, encryption key, and cipher settings."
                 }
-                SQLitendError::OpenDb(_) | SQLitendError::Step(_) => {
+                SQLitendError::OpenDb(_) => {
                     "If the database is malformed, choose Drop Context and run the query again."
                 }
-                SQLitendError::Prepare(_) => "Check the SQL syntax.",
+                SQLitendError::Prepare(_) => {
+                    "Check the SQL syntax. Earlier statements may have completed; \
+                    failed batches are not automatically rolled back."
+                }
+                SQLitendError::Step(_) => {
+                    "Earlier statements may have completed; failed batches are not \
+                    automatically rolled back."
+                }
             },
             WorkerError::NotOpened => "Try switching the VFS and running the query again.",
             WorkerError::Unexpected => "Please report this error on GitHub.",
@@ -45,6 +52,9 @@ fn error_details(error: &SQLightError) -> &'static str {
         SQLightError::AceEditor(_) => "Please report this error on GitHub.",
         SQLightError::ImportDb(_) => {
             "The file could not be read. Check that it is accessible and fits in memory."
+        }
+        SQLightError::EmbedChanged => {
+            "Your current SQL was preserved. Open the Execution tab to view the results."
         }
     }
 }

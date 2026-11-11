@@ -2,6 +2,8 @@ $arrow-height: 10px;
 $arrow-width: 20px;
 
 .container {
+  display: flex;
+  flex-direction: column;
   z-index: 10;
   font-size: var(--secondary-font-size);
 
@@ -15,6 +17,8 @@ $arrow-width: 20px;
 }
 
 .-content {
+  min-height: 0;
+  overflow-y: auto;
   margin: $arrow-height;
   box-shadow:
     5px 5px 20px -3px rgb(0 0 0 / 25%),

@@ -1,5 +1,56 @@
 import assert from 'node:assert/strict';
 
+async function checkExecutionShortcuts(page, shortcuts) {
+  for (const [index, keybinding] of [
+    'ace', 'emacs', 'sublime', 'vim', 'vscode',
+  ].entries()) {
+    await page.getByRole('button', { name: 'Config', exact: true }).click();
+    await page
+      .getByRole('combobox', { name: 'Keybinding', exact: true })
+      .selectOption(keybinding);
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+
+    for (const [shortcutIndex, shortcut] of shortcuts.entries()) {
+      const value = 800 + index * 10 + shortcutIndex;
+      const sql = `SELECT ${value} AS keyboard_${keybinding};`;
+      await page.evaluate((sql) => ace.edit('ace_editor').setValue(sql, -1), sql);
+      await page.locator('#ace_editor').click();
+      await page.keyboard.press(shortcut);
+      await page.getByRole('cell', { name: String(value), exact: true }).waitFor();
+      await page.getByText('Finished', { exact: true }).waitFor();
+      assert.equal(
+        await page.evaluate(() => ace.edit('ace_editor').getValue()),
+        sql,
+        `${keybinding} executes ${shortcut} without modifying the SQL`,
+      );
+    }
+  }
+}
+
+async function checkMacExecutionShortcuts(page) {
+  const context = await page.context().browser().newContext();
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel' });
+  });
+  const macPage = await context.newPage();
+  macPage.setDefaultTimeout(20_000);
+  const errors = [];
+  macPage.on('pageerror', (error) => errors.push(error.message));
+  try {
+    await macPage.goto(new URL('.', page.url()).href);
+    await macPage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
+    assert.equal(
+      await macPage.evaluate(() => ace.require('ace/lib/useragent').isMac),
+      true,
+    );
+    await checkExecutionShortcuts(macPage, ['Control+Enter', 'Meta+Enter']);
+    assert.deepEqual(errors, [], 'Mac shortcuts run without browser errors');
+  } finally {
+    await context.close();
+  }
+}
+
 export async function checkEditor(page) {
   const editor = page.locator('#ace_editor');
   const runButton = page.getByRole('button', { name: 'Run', exact: true });
@@ -126,6 +177,11 @@ export async function checkEditor(page) {
       const editor = ace.edit('ace_editor');
       return editor.getKeyboardHandler() === editor.commands;
     });
+
+    // Every preset must preserve the application's execution shortcut.
+    await checkExecutionShortcuts(page, ['Control+Enter']);
+    await checkMacExecutionShortcuts(page);
+    await configure({ Keybinding: 'ace' });
 
     // Keep the selection unchanged while testing both settings.
     await selectSql(true);

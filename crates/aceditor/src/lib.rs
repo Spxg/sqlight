@@ -86,10 +86,32 @@ export function defineVimWrite() {
     const { CodeMirror } = ace.require("ace/keyboard/vim");
     CodeMirror.Vim.defineEx("write", "w", cm => cm.ace.execCommand("executeCode"));
 }
+
+export function bindCommandShortcut(editor, command) {
+    const { HashHandler } = ace.require("ace/keyboard/hash_handler");
+    const { keyCodeToString } = ace.require("ace/lib/keys");
+    const shortcuts = new HashHandler([command], editor.commands.platform);
+    const onKeyDown = event => {
+        const modifiers = (event.ctrlKey ? 1 : 0)
+            | (event.altKey ? 2 : 0)
+            | (event.shiftKey ? 4 : 0)
+            | (event.metaKey ? 8 : 0);
+        if (!shortcuts.findKeyCommand(modifiers, keyCodeToString(event.keyCode))) return;
+        event.preventDefault();
+        event.stopPropagation();
+        editor.execCommand(command.name);
+    };
+    // Capture application shortcuts before an editor preset handles the key.
+    editor.container.addEventListener("keydown", onKeyDown, true);
+    return () => editor.container.removeEventListener("keydown", onKeyDown, true);
+}
 "#)]
     extern "C" {
         #[wasm_bindgen(js_name = defineVimWrite, catch)]
         pub fn define_vim_write() -> Result<(), JsValue>;
+
+        #[wasm_bindgen(js_name = bindCommandShortcut)]
+        pub fn bind_command_shortcut(editor: &Editor, command: &JsValue) -> Function;
     }
 
     #[wasm_bindgen]
@@ -213,6 +235,7 @@ pub struct Editor {
     js: bindgen::Editor,
     change_listener: Option<Closure<dyn Fn()>>,
     command_callbacks: Vec<Closure<dyn Fn()>>,
+    command_shortcuts: Vec<js_sys::Function>,
 }
 
 impl Editor {
@@ -224,6 +247,7 @@ impl Editor {
             js: editor,
             change_listener: None,
             command_callbacks: Vec::new(),
+            command_shortcuts: Vec::new(),
         })
     }
 
@@ -258,9 +282,10 @@ impl Editor {
                 .clone(),
             read_only: true,
         };
-        self.js
-            .commands()
-            .add_command(serde_wasm_bindgen::to_value(&command).unwrap());
+        let command = serde_wasm_bindgen::to_value(&command).unwrap();
+        self.js.commands().add_command(command.clone());
+        self.command_shortcuts
+            .push(bindgen::bind_command_shortcut(&self.js, &command));
         self.command_callbacks.push(callback);
     }
 
@@ -317,6 +342,9 @@ impl Drop for Editor {
     fn drop(&mut self) {
         if let Some(listener) = &self.change_listener {
             self.js.off("change", listener.as_ref().unchecked_ref());
+        }
+        for remove_shortcut in &self.command_shortcuts {
+            remove_shortcut.call0(&JsValue::NULL).unwrap();
         }
         self.js.destroy();
     }

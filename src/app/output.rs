@@ -113,22 +113,30 @@ pub fn Output() -> impl IntoView {
                         </button>
                     </Show>
                 </div>
-                <Show when=move || state.focus().read().is_some()>
-                    <div
-                        id="output-panel"
-                        class=styles::body
-                        role="tabpanel"
-                        tabindex="0"
-                        aria-labelledby=move || state.focus().get().map(tab_id)
-                    >
-                        {move || match state.focus().get() {
-                            Some(Focus::Execute) => view! { <Execute /> }.into_any(),
-                            Some(Focus::Share) => view! { <Share /> }.into_any(),
-                            Some(Focus::Status) => view! { <Status /> }.into_any(),
-                            None => ().into_any(),
-                        }}
-                    </div>
-                </Show>
+                <div
+                    id="output-panel"
+                    class=styles::body
+                    role="tabpanel"
+                    tabindex="0"
+                    aria-labelledby=move || state.focus().get().map(tab_id)
+                    hidden=move || state.focus().get().is_none()
+                >
+                    <Show when=move || state.opened_focus().read().contains(&Focus::Execute)>
+                        <div hidden=move || state.focus().get() != Some(Focus::Execute)>
+                            <Execute />
+                        </div>
+                    </Show>
+                    <Show when=move || state.opened_focus().read().contains(&Focus::Share)>
+                        <div hidden=move || state.focus().get() != Some(Focus::Share)>
+                            <Share />
+                        </div>
+                    </Show>
+                    <Show when=move || state.opened_focus().read().contains(&Focus::Status)>
+                        <div hidden=move || state.focus().get() != Some(Focus::Status)>
+                            <Status />
+                        </div>
+                    </Show>
+                </div>
             </div>
         </Show>
     }

@@ -93,20 +93,55 @@ export async function checkEngineSelection(page) {
 
 export async function checkWorkers(page) {
   const checked = await page.evaluate(async () => {
-    const checked = [];
-    for (const engine of ['sqlite3', 'sqlite3mc', 'sqlcipher']) {
+    async function startWorker(engine) {
       const worker = new Worker(`./${engine}_loader.js`, { type: 'module' });
       const pending = [];
-      worker.onmessage = (event) => pending.shift()(event.data);
-      const receive = () => new Promise((resolve) => pending.push(resolve));
-      const ready = await receive();
-      if (ready !== 'Ready')
-        throw new Error(`Unexpected worker ready: ${JSON.stringify(ready)}`);
+      worker.onmessage = (event) => pending.shift()?.resolve(event.data);
+      worker.onerror = (event) => {
+        const error = new Error(`${engine}: Worker error: ${event.message}`);
+        for (const response of pending.splice(0)) response.reject(error);
+      };
+      const receive = (label) =>
+        new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            pending.splice(pending.indexOf(response), 1);
+            reject(new Error(`${engine}: Timed out waiting for ${label}`));
+          }, 30_000);
+          const response = {
+            resolve(value) {
+              clearTimeout(timeout);
+              resolve(value);
+            },
+            reject(error) {
+              clearTimeout(timeout);
+              reject(error);
+            },
+          };
+          pending.push(response);
+        });
       const request = async (value) => {
-        const response = receive();
+        const label = typeof value === 'string' ? value : Object.keys(value)[0];
+        const response = receive(label);
         worker.postMessage(value);
         return response;
       };
+      try {
+        const ready = await receive('Ready');
+        if (ready !== 'Ready')
+          throw new Error(
+            `${engine}: Unexpected worker ready: ${JSON.stringify(ready)}`,
+          );
+      } catch (error) {
+        worker.terminate();
+        throw error;
+      }
+      return { request, terminate: () => worker.terminate() };
+    }
+
+    const checked = [];
+    for (const engine of ['sqlite3', 'sqlite3mc', 'sqlcipher']) {
+      const worker = await startWorker(engine);
+      const request = worker.request;
       const unwrap = (response) => {
         const result = Object.values(response)[0];
         if (!Object.hasOwn(result, 'Ok'))
@@ -116,7 +151,12 @@ export async function checkWorkers(page) {
       const run = (sql) => ({
         Run: { sql, embed: false, clear_on_prepare: false },
       });
-      const sql = async (value) => unwrap(await request(run(value)));
+      const sql = async (value) => {
+        const result = unwrap(await request(run(value)));
+        if (result.error)
+          throw new Error(`${engine}: ${JSON.stringify(result.error)}`);
+        return result;
+      };
       const table = (result, column) => {
         const values = result.result.find((item) =>
           item.Step?.values?.columns.includes(column),
@@ -172,6 +212,16 @@ export async function checkWorkers(page) {
         if (value(imported, 'value') !== '7')
           throw new Error(`${engine}: Database transfer changed rows`);
 
+        for (const size of [6, 513]) {
+          const invalid = await request({
+            LoadDb: { data: new Uint8Array(size) },
+          });
+          if (!invalid.LoadDb.Err)
+            throw new Error(`${engine}: Import accepted an invalid ${size}-byte file`);
+          if (value(await sql('SELECT value FROM persistent;'), 'value') !== '7')
+            throw new Error(`${engine}: Invalid import replaced the current database`);
+        }
+
         if (engine !== 'sqlite3') {
           unwrap(
             await request({
@@ -192,7 +242,7 @@ export async function checkWorkers(page) {
             const wrongKey = await request(
               run("PRAGMA key='wrong-key'; SELECT count(*) FROM sqlite_master;"),
             );
-            const error = wrongKey.Run.Err?.SQLite;
+            const error = wrongKey.Run.Ok?.error ?? wrongKey.Run.Err?.SQLite;
             if (!error || Object.values(error)[0].code !== 26)
               throw new Error(`Wrong key did not fail: ${JSON.stringify(wrongKey)}`);
             unwrap(await request({ LoadDb: { data: encrypted.data } }));
@@ -245,6 +295,106 @@ export async function checkWorkers(page) {
           if (!/^'v?\d+\./.test(value(restored, 'vec')))
             throw new Error('SQLCipher: sqlite-vec failed after OPFS import');
         }
+
+        const baseline = unwrap(await request('DownloadDb'));
+        for (const mode of ['TRUNCATE', 'PERSIST']) {
+          const journal = await sql(
+            key + `PRAGMA journal_mode=${mode};
+            INSERT INTO persisted VALUES (456);`,
+          );
+          if (value(journal, 'journal_mode') !== `'${mode.toLowerCase()}'`)
+            throw new Error(`${engine}: Failed to enable ${mode} journaling`);
+
+          const downloaded = unwrap(await request('DownloadDb'));
+          if (!downloaded.data.length)
+            throw new Error(`${engine}: ${mode} journal prevented OPFS export`);
+
+          await sql(key + `PRAGMA journal_mode=${mode};
+            INSERT INTO persisted VALUES (678);`);
+          // Retained journals must not block replacing the main database.
+          unwrap(await request({ LoadDb: { data: baseline.data } }));
+          const imported = table(
+            await sql(key + 'SELECT value FROM persisted;'),
+            'value',
+          );
+          if (imported.rows.length !== 1 || imported.rows[0][0] !== '123')
+            throw new Error(`${engine}: ${mode} journal prevented OPFS import`);
+
+          await sql(`PRAGMA journal_mode=${mode};
+            INSERT INTO persisted VALUES (789);`);
+          const reset = unwrap(
+            await request({
+              Run: {
+                sql: key + `SELECT count(*) AS remaining
+                  FROM sqlite_master WHERE name='persisted';`,
+                embed: false,
+                clear_on_prepare: true,
+              },
+            }),
+          );
+          if (value(reset, 'remaining') !== '0')
+            throw new Error(`${engine}: ${mode} journal survived dropping context`);
+          unwrap(await request({ LoadDb: { data: baseline.data } }));
+        }
+
+        unwrap(await request({
+          Open: { filename: 'handoff-memory.db', persist: false },
+        }));
+        await sql(`CREATE TABLE cached(value);
+          INSERT INTO cached VALUES (321);`);
+        const peer = await startWorker(engine);
+        try {
+          const persistent = {
+            Open: { filename: `smoke-${engine}.db`, persist: true },
+          };
+          unwrap(await peer.request(persistent));
+          const shared = unwrap(
+            await peer.request(run(key + 'SELECT value FROM persisted;')),
+          );
+          if (value(shared, 'value') !== '123')
+            throw new Error(`${engine}: OPFS data changed after releasing locks`);
+
+          const blocked = await request(persistent);
+          if (blocked.Open.Err !== 'OpfsSAHPoolOpened')
+            throw new Error(`${engine}: OPFS allowed two workers to hold locks`);
+          unwrap(await request({
+            Open: { filename: 'handoff-memory.db', persist: false },
+          }));
+          if (value(await sql('SELECT value FROM cached;'), 'value') !== '321')
+            throw new Error(`${engine}: Failed OPFS resume lost the Memory database`);
+
+          unwrap(await peer.request({
+            Open: { filename: 'peer-memory.db', persist: false },
+          }));
+          unwrap(await request(persistent));
+          const resumed = await sql(key + 'SELECT value FROM persisted;');
+          if (value(resumed, 'value') !== '123')
+            throw new Error(`${engine}: OPFS resume did not restore the database`);
+        } finally {
+          peer.terminate();
+        }
+
+        // A nonempty WAL must survive a refused export, even after SQLite closes.
+        await sql(`ATTACH 'smoke-${engine}.db-wal' AS retained;
+          CREATE TABLE retained.marker(value);
+          INSERT INTO retained.marker VALUES (999);
+          DETACH retained;`);
+        const unsafeExport = await request('DownloadDb');
+        if (!unsafeExport.DownloadDb.Err)
+          throw new Error(`${engine}: Export discarded a nonempty WAL`);
+        unwrap(await request({
+          Open: { filename: `smoke-${engine}.db-wal`, persist: true },
+        }));
+        const retained = await sql(key + 'SELECT value FROM marker;');
+        if (value(retained, 'value') !== '999')
+          throw new Error(`${engine}: Failed export changed WAL contents`);
+        unwrap(await request({
+          Open: { filename: `smoke-${engine}.db`, persist: true },
+        }));
+        unwrap(await request({
+          Run: { sql: key + 'SELECT 1;', embed: false, clear_on_prepare: true },
+        }));
+        unwrap(await request({ LoadDb: { data: baseline.data } }));
         checked.push(engine);
       } finally {
         worker.terminate();

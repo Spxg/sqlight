@@ -9,6 +9,16 @@ The layout follows the [Rust Playground](https://play.rust-lang.org), using
 resizable editor and output panes, light and dark themes, alternative editor
 keybindings, database import and export, and SQLite extensions.
 
+Query results show 100 rows per page. Switching output tabs or collapsing the
+panel keeps the current result page. If a statement fails, execution stops and
+completed query results remain available in Execution. Statements are not
+automatically wrapped in a transaction; use `BEGIN` and `ROLLBACK` when needed.
+
+Share links include the SQL, database engine, and Keep Context setting. Opening a
+link loads the example without running it. After loading, the share parameters
+are removed from the address bar so refreshing restores your subsequent edits.
+Database files are not included in share links.
+
 | Extension | Description |
 | --- | --- |
 | [sqlite-vec](https://crates.io/crates/sqlite-wasm-vec) | Vector search for SQLite. |
@@ -100,6 +110,9 @@ npm run build
 npx playwright install chromium
 npm run test:browser
 ```
+
+To check a build outside `dist`, pass its directory with
+`npm run test:browser -- /path/to/build`.
 
 The script serves `dist` on localhost and checks editing, formatting, keyboard
 execution, SQL results and error recovery, saved preferences, sharing, and database

@@ -18,6 +18,8 @@ pub enum SQLightError {
     AceEditor(#[from] EditorError),
     #[error("Failed to import db: {0}")]
     ImportDb(String),
+    #[error("Query results were not embedded because the SQL changed during execution.")]
+    EmbedChanged,
 }
 
 impl SQLightError {

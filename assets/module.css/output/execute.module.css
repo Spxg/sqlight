@@ -3,6 +3,35 @@
   margin: 1em 0;
 }
 
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75em;
+  margin: 1em 0;
+}
+
+.pageButtons {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+}
+
+.pageButtons button {
+  background: var(--background-color);
+  color: inherit;
+  border: 1px solid #999999;
+  border-radius: 3px;
+  padding: 0.35em 0.65em;
+  cursor: pointer;
+}
+
+.pageButtons button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .table {
   border-collapse: collapse;
   width: 100%;

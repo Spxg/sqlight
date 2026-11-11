@@ -21,5 +21,7 @@ mod state;
 mod tools_menu;
 mod vfs_menu;
 
+pub(crate) use output::change_focus;
 pub use playground::Playground;
+pub(crate) use playground::embed_query_result;
 pub use state::*;

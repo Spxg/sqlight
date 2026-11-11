@@ -38,8 +38,6 @@ pub struct GlobalState {
     #[serde(skip)]
     output: Vec<SQLiteStatementResult>,
     #[serde(skip)]
-    embed: Vec<SQLiteStatementResult>,
-    #[serde(skip)]
     last_error: Option<SendWrapper<SQLightError>>,
     #[serde(skip)]
     import_progress: Option<ImportProgress>,
@@ -65,7 +63,6 @@ impl Default for GlobalState {
             share_href: None,
             show_something: false,
             output: vec![],
-            embed: vec![],
             last_error: None,
             import_progress: None,
             exported: None,
@@ -130,6 +127,23 @@ pub enum Engine {
 }
 
 impl Engine {
+    pub fn url_value(self) -> &'static str {
+        match self {
+            Self::SQLite => "sqlite3",
+            Self::MultipleCiphers => "sqlite3mc",
+            Self::SQLCipher => "sqlcipher",
+        }
+    }
+
+    pub fn from_url_value(value: &str) -> Option<Self> {
+        match value {
+            "sqlite3" => Some(Self::SQLite),
+            "sqlite3mc" => Some(Self::MultipleCiphers),
+            "sqlcipher" => Some(Self::SQLCipher),
+            _ => None,
+        }
+    }
+
     pub fn value(self) -> &'static str {
         match self {
             Self::SQLite => "SQLite",

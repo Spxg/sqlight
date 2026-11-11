@@ -10,7 +10,10 @@ use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 use crate::{
     OpenOptions, SQLightError, SQLiteRunResult, SendWrapper, WorkerError, WorkerRequest,
     WorkerResponse,
-    app::{Engine, Exported, GlobalState, GlobalStateStoreFields, Vfs},
+    app::{
+        Engine, Exported, Focus, GlobalState, GlobalStateStoreFields, Vfs, change_focus,
+        embed_query_result,
+    },
 };
 
 type Result<T> = std::result::Result<T, WorkerError>;
@@ -119,6 +122,10 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
     }
     state.last_error().set(None);
 
+    let embed_sql = match &request {
+        WorkerRequest::Run(options) if options.embed => Some(options.sql.clone()),
+        _ => None,
+    };
     let persist = state.vfs().get_untracked() == Vfs::OPFS;
     let (session, uri) = match state.engine().get_untracked() {
         Engine::SQLite => (SQLITE.with(Clone::clone), "./sqlite3_loader.js"),
@@ -146,7 +153,7 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
             state.is_running().set(false);
         }
         match response {
-            Ok(response) => handle_response(state, response),
+            Ok(response) => handle_response(state, response, embed_sql.as_deref()),
             Err(error) => {
                 if importing {
                     state.import_progress().update(|progress| {
@@ -163,14 +170,39 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
     });
 }
 
-fn handle_response(state: Store<GlobalState>, response: WorkerResponse) {
+fn handle_response(state: Store<GlobalState>, response: WorkerResponse, embed_sql: Option<&str>) {
     match response {
         WorkerResponse::Run(result) => match result {
-            Ok(SQLiteRunResult { embed, result }) => {
-                if embed {
-                    state.embed().set(result);
+            Ok(SQLiteRunResult {
+                embed,
+                result,
+                error,
+            }) => {
+                let can_embed = embed
+                    && error.is_none()
+                    && state.editor().with_untracked(|editor| {
+                        editor.as_ref().is_some_and(|editor| {
+                            embed_sql.is_some_and(|sql| editor.get_value() == sql)
+                        })
+                    });
+                if can_embed {
+                    let sql = embed_query_result(embed_sql.unwrap(), &result);
+                    state.editor().with_untracked(|editor| {
+                        editor.as_ref().unwrap().set_value(sql);
+                    });
                 } else {
                     state.output().set(result);
+                    if let Some(error) = error {
+                        change_focus(state, Some(Focus::Execute));
+                        state
+                            .last_error()
+                            .set(Some(SQLightError::new_worker(error.into())));
+                    } else if embed {
+                        change_focus(state, Some(Focus::Execute));
+                        state
+                            .last_error()
+                            .set(Some(SendWrapper::new(SQLightError::EmbedChanged)));
+                    }
                 }
             }
             Err(err) => state.last_error().set(Some(SQLightError::new_worker(err))),

@@ -7,8 +7,13 @@ import { chromium } from 'playwright';
 import { checkEditor } from './editor-checks.mjs';
 import { checkEngineSelection, checkWorkers } from './engine-checks.mjs';
 import { checkExecutionProgress } from './loading-checks.mjs';
+import { checkInteractions } from './interaction-checks.mjs';
+import { checkBatchFailures, checkResultPaging } from './result-checks.mjs';
+import { checkSharing } from './share-checks.mjs';
 
-const dist = fileURLToPath(new URL('../dist/', import.meta.url));
+const dist = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : fileURLToPath(new URL('../dist/', import.meta.url));
 const types = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -258,6 +263,10 @@ try {
   await page.evaluate(() => globalThis.blockingWorker.terminate());
 
   await checkEditor(page);
+  await checkResultPaging(page);
+  await checkBatchFailures(page);
+  await checkInteractions(page);
+  await checkSharing(page);
 
   await checkEngineSelection(page);
   await checkWorkers(page);
@@ -267,7 +276,7 @@ try {
     'The app should load and run without browser errors',
   );
   console.log(
-    'Browser checks passed: editor, execution, preferences, sharing, transfers, all three engines, encryption, and OPFS.',
+    'Browser checks passed: editor, execution, result paging, partial failures, preferences, sharing, transfers, all three engines, encryption, and OPFS.',
   );
 } catch (error) {
   await mkdir('test-results', { recursive: true });

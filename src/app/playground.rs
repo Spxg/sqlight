@@ -8,7 +8,7 @@ use split_grid::{Gutter, SplitOptions};
 use wasm_bindgen::{JsCast, prelude::Closure};
 
 use crate::{
-    SQLightError, SQLiteStatementResult, SendWrapper,
+    SQLightError, SQLiteStatementResult, SQLiteStatementValues, SendWrapper,
     app::{
         Focus,
         editor::Editor,
@@ -38,7 +38,6 @@ pub fn Playground() -> impl IntoView {
     handle_status(state);
     handle_save_state(state);
     handle_ace_config(state, theme);
-    handle_embed_query_result(state);
 
     view! {
         <div id="playground" class=styles::container>
@@ -71,36 +70,71 @@ fn media_query(query: &str) -> RwSignal<bool> {
     matches
 }
 
-fn handle_embed_query_result(state: Store<GlobalState>) {
-    Effect::new(move || {
-        let sqls = state.embed().with(|results| {
-            results
-                .iter()
-                .filter_map(embedded_result)
-                .collect::<Vec<_>>()
-        });
+pub(crate) fn embed_query_result(source: &str, results: &[SQLiteStatementResult]) -> String {
+    let mut output = String::with_capacity(source.len());
+    let mut consumed = 0;
 
-        if !sqls.is_empty() {
-            state.editor().with_untracked(|editor| {
-                if let Some(editor) = editor {
-                    editor.set_value(sqls.join("\n\n"));
-                }
-            });
+    for result in results {
+        let SQLiteStatementResult::Step(table) = result else {
+            continue;
+        };
+        let [start, end] = table.position;
+        output.push_str(&source[consumed..start]);
+        let sql = without_leading_results(&source[start..end]);
+
+        if let Some(values) = &table.values {
+            // Keep blank lines before the result and indentation with the SQL.
+            let whitespace_end = sql.len() - sql.trim_start().len();
+            let prefix_end = sql[..whitespace_end]
+                .rfind('\n')
+                .map_or(0, |index| index + 1);
+            output.push_str(&sql[..prefix_end]);
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&result_comment(values));
+            output.push_str(&sql[prefix_end..]);
+        } else {
+            output.push_str(&sql);
         }
-    });
+        consumed = end;
+    }
+
+    output.push_str(&source[consumed..]);
+    output
 }
 
-fn embedded_result(result: &SQLiteStatementResult) -> Option<String> {
-    const MARK: &str = "-- R:";
+fn without_leading_results(mut sql: &str) -> String {
+    let mut output = String::with_capacity(sql.len());
+    loop {
+        let whitespace = sql.bytes().take_while(u8::is_ascii_whitespace).count();
+        output.push_str(&sql[..whitespace]);
+        sql = &sql[whitespace..];
 
-    let SQLiteStatementResult::Step(table) = result else {
-        return None;
-    };
-    let sql = table.sql.trim();
-    let Some(values) = &table.values else {
-        return Some(sql.to_owned());
-    };
+        if sql.starts_with("--") {
+            let end = sql.find('\n').map_or(sql.len(), |index| index + 1);
+            let generated = sql.starts_with("-- R: +") || sql.starts_with("-- R: |");
+            if !generated {
+                output.push_str(&sql[..end]);
+            }
+            sql = &sql[end..];
+        } else if sql.starts_with("/*") {
+            let end = sql.find("*/").map_or(sql.len(), |index| index + 2);
+            output.push_str(&sql[..end]);
+            sql = &sql[end..];
+        } else if let Some(rest) = sql.strip_prefix(';') {
+            output.push(';');
+            sql = rest;
+        } else {
+            // SQL strings and comments inside the statement remain untouched.
+            output.push_str(sql);
+            break;
+        }
+    }
+    output
+}
 
+fn result_comment(values: &SQLiteStatementValues) -> String {
     let mut rendered = Table::new();
     rendered.add_row(Row::new(
         values
@@ -113,20 +147,14 @@ fn embedded_result(result: &SQLiteStatementResult) -> Option<String> {
         rendered.add_row(Row::new(row.iter().map(|value| Cell::new(value)).collect()));
     }
 
+    let rendered = rendered.to_string().replace('\0', "\\0");
     let mut result = String::new();
-    for line in rendered.to_string().lines() {
-        result.push_str(MARK);
-        result.push(' ');
+    for line in rendered.lines() {
+        result.push_str("-- R: ");
         result.push_str(line);
         result.push('\n');
     }
-    result.push_str(
-        &sql.lines()
-            .filter(|line| !line.starts_with(MARK))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
-    Some(result)
+    result
 }
 
 fn handle_ace_config(state: Store<GlobalState>, theme: Memo<Theme>) {
@@ -158,30 +186,45 @@ fn handle_ace_config(state: Store<GlobalState>, theme: Memo<Theme>) {
 }
 
 fn handle_save_state(state: Store<GlobalState>) {
-    Effect::new(move || {
-        state.vfs().track();
-        state.editor_config().track();
-        state.orientation().track();
-        state.theme().track();
-        state.keep_ctx().track();
-        state.sql().track();
-        state.run_selected_sql().track();
-        state.engine().track();
+    let pending = StoredValue::new(None::<TimeoutHandle>);
+    let save = move || {
+        if let Some(timeout) = pending.get_value() {
+            timeout.clear();
+            pending.set_value(None);
+            state.read_untracked().save();
+        }
+    };
 
-        let timeout = set_timeout_with_handle(
-            move || state.read_untracked().save(),
-            Duration::from_millis(300),
-        )
-        .unwrap();
-        on_cleanup(move || timeout.clear());
-    });
+    Effect::watch(
+        move || {
+            state.vfs().track();
+            state.editor_config().track();
+            state.orientation().track();
+            state.theme().track();
+            state.keep_ctx().track();
+            state.sql().track();
+            state.run_selected_sql().track();
+            state.engine().track();
+        },
+        move |_, _, _| {
+            if let Some(timeout) = pending.get_value() {
+                timeout.clear();
+            }
+            let timeout = set_timeout_with_handle(save, Duration::from_millis(300)).unwrap();
+            pending.set_value(Some(timeout));
+        },
+        false,
+    );
 
-    let callback = Closure::<dyn Fn()>::new(move || state.read_untracked().save());
+    let callback = Closure::<dyn Fn()>::new(save);
     window()
         .add_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref())
         .unwrap();
     let callback = SendWrapper::new(callback);
     on_cleanup(move || {
+        if let Some(timeout) = pending.get_value() {
+            timeout.clear();
+        }
         window()
             .remove_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref())
             .unwrap();

@@ -156,7 +156,7 @@ where
                             <path stroke="none" d="M0,0 H20 L10,10 Z"></path>
                         </svg>
                     </div>
-                    <div node_ref=content_ref role="dialog">
+                    <div node_ref=content_ref class=styles::contentBottom role="dialog">
                         {menu(set_open)}
                     </div>
                 </div>

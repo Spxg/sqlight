@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{Blob, BlobPropertyBag, Event, HtmlInputElement, MouseEvent, Url, UrlSearchParams};
+use web_sys::{Blob, BlobPropertyBag, Event, HtmlInputElement, MouseEvent, Url};
 
 use crate::{
     LoadDbOptions, RunOptions, SQLightError, SendWrapper, WorkerRequest,
@@ -405,9 +405,17 @@ fn ShareButton() -> impl IntoView {
 
         if let Ok(href) = window().location().href().and_then(|href| {
             let url = Url::new(&href)?;
-            let params = UrlSearchParams::new()?;
+            let params = url.search_params();
             params.set("code", &code);
-            url.set_search(&params.to_string().as_string().unwrap());
+            params.set("engine", state.engine().get_untracked().url_value());
+            params.set(
+                "keep_ctx",
+                if state.keep_ctx().get_untracked() {
+                    "1"
+                } else {
+                    "0"
+                },
+            );
             Ok(url.href())
         }) {
             state.share_href().set(Some(href));

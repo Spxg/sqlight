@@ -2,13 +2,16 @@ use aceditor::{BindKey, EditorOptionsBuilder};
 use istyles::istyles;
 use leptos::prelude::*;
 use reactive_stores::Store;
-use wasm_bindgen::{JsCast, prelude::Closure};
+use wasm_bindgen::{JsCast, JsValue, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
-use web_sys::{ResizeObserver, UrlSearchParams};
+use web_sys::{ResizeObserver, Url};
 
 use crate::{
     SQLightError, SendWrapper,
-    app::{GlobalState, GlobalStateStoreFields, Theme, header::execute, playground::ResolvedTheme},
+    app::{
+        Engine, GlobalState, GlobalStateStoreFields, Theme, header::execute,
+        playground::ResolvedTheme,
+    },
 };
 
 istyles!(styles, "assets/module.postcss/editor.module.css.map");
@@ -19,8 +22,8 @@ pub fn Editor() -> impl IntoView {
     let theme = expect_context::<ResolvedTheme>().0;
     let editor_ref = NodeRef::<leptos::html::Div>::new();
 
-    if let Some(code) = shared_code() {
-        state.sql().set(code);
+    if let Err(error) = load_shared_code(state) {
+        log::error!("Failed to load shared SQL: {error:?}");
     }
 
     editor_ref.on_load(move |element| {
@@ -96,7 +99,31 @@ pub fn Editor() -> impl IntoView {
     }
 }
 
-fn shared_code() -> Option<String> {
-    let search = window().location().search().ok()?;
-    UrlSearchParams::new_with_str(&search).ok()?.get("code")
+fn load_shared_code(state: Store<GlobalState>) -> Result<(), JsValue> {
+    let url = Url::new(&window().location().href()?)?;
+    let params = url.search_params();
+    let Some(code) = params.get("code") else {
+        return Ok(());
+    };
+
+    state.sql().set(code);
+    if let Some(engine) = params
+        .get("engine")
+        .as_deref()
+        .and_then(Engine::from_url_value)
+    {
+        state.engine().set(engine);
+    }
+    match params.get("keep_ctx").as_deref() {
+        Some("1") => state.keep_ctx().set(true),
+        Some("0") => state.keep_ctx().set(false),
+        _ => {}
+    }
+    state.read_untracked().save();
+
+    for name in ["code", "engine", "keep_ctx"] {
+        params.delete(name);
+    }
+    let history = window().history()?;
+    history.replace_state_with_url(&history.state()?, "", Some(&url.href()))
 }

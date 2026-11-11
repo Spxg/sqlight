@@ -76,6 +76,15 @@ impl SQLiteWorker {
                 .map_err(|_| WorkerError::OpfsSAHPoolOpened)?,
             );
         }
+        if let Some(opfs) = &self.opfs {
+            if options.persist {
+                opfs.resume()
+                    .await
+                    .map_err(|_| WorkerError::OpfsSAHPoolOpened)?;
+            } else {
+                opfs.pause().map_err(|_| WorkerError::Unexpected)?;
+            }
+        }
         self.db = Some(SQLiteDb::open(&uri(&options))?);
         self.options = Some(options);
         Ok(())
@@ -87,40 +96,45 @@ impl SQLiteWorker {
         Ok(())
     }
 
-    fn remove_db(&self) -> Result<()> {
+    fn remove_db(&mut self) -> Result<()> {
+        // SQLite must finish rollback/checkpoint work before its files are removed.
+        self.db = None;
         let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
-        if options.persist {
-            self.opfs
-                .as_ref()
-                .unwrap()
-                .remove(&options.filename)
-                .map_err(|_| WorkerError::Unexpected)?;
-        } else {
-            self.memory.remove(&options.filename).unwrap();
+        // PERSIST/TRUNCATE journals can survive closing the connection.
+        for suffix in ["-journal", "-wal", "-shm", ""] {
+            let filename = format!("{}{suffix}", options.filename);
+            if options.persist {
+                self.opfs
+                    .as_ref()
+                    .unwrap()
+                    .remove(&filename)
+                    .map_err(|_| WorkerError::Unexpected)?;
+            } else {
+                self.memory.remove(&filename).unwrap();
+            }
         }
         Ok(())
     }
 
     fn run(&mut self, options: RunOptions) -> Result<SQLiteRunResult> {
         if options.clear_on_prepare {
-            self.db = None;
             self.remove_db()?;
             self.reopen()?;
         }
         let db = self.db.as_ref().ok_or(WorkerError::InvalidState)?;
-        let result = db.prepare(&options.sql)?.results()?;
+        let mut result = Vec::new();
+        let error = db.prepare(&options.sql)?.results(&mut result).err();
         Ok(SQLiteRunResult {
             embed: options.embed,
             result,
+            error,
         })
     }
 
     fn load_db(&mut self, data: LoadDbOptions) -> Result<()> {
         let data = data.data.to_vec();
-        #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
         validate_import_db(&data).map_err(|err| WorkerError::LoadDb(err.to_string()))?;
 
-        self.db = None;
         self.remove_db()?;
         let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         let result = if options.persist {
@@ -148,15 +162,9 @@ impl SQLiteWorker {
         let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         let filename = options.filename.clone();
         let data = if options.persist {
-            self.opfs
-                .as_ref()
-                .unwrap()
-                .export_db(&filename)
-                .map_err(|err| WorkerError::DownloadDb(err.to_string()))
+            export_db(self.opfs.as_ref().unwrap(), &filename)
         } else {
-            self.memory
-                .export_db(&filename)
-                .map_err(|err| WorkerError::DownloadDb(err.to_string()))
+            export_db(&self.memory, &filename)
         };
         self.reopen()?;
         Ok(DownloadDbResponse {
@@ -164,6 +172,38 @@ impl SQLiteWorker {
             data: Uint8Array::new_from_slice(&data?),
         })
     }
+}
+
+fn export_db<T>(vfs: &T, filename: &str) -> Result<Vec<u8>>
+where
+    T: DbTransfer + VfsFilesManager,
+    <T as DbTransfer>::Error: std::fmt::Display,
+    <T as VfsFilesManager>::Error: std::fmt::Display,
+{
+    fn error(error: impl std::fmt::Display) -> WorkerError {
+        WorkerError::DownloadDb(error.to_string())
+    }
+
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let sidecar = format!("{filename}{suffix}");
+        if !vfs.contains(&sidecar).map_err(error)? {
+            continue;
+        }
+        let mut source = vfs.begin_export(&sidecar).map_err(error)?;
+        let mut first = [0];
+        let length = source.read(&mut first).map_err(error)?;
+        drop(source);
+        // SQLite treats a zero journal header as cold. Preserve WAL data and
+        // potentially hot journals instead of exporting an incomplete database.
+        if length == 0 || (suffix == "-journal" && first[0] == 0) {
+            vfs.remove(&sidecar).map_err(error)?;
+        } else if suffix != "-shm" {
+            return Err(WorkerError::DownloadDb(format!(
+                "Database has a journal or WAL that needs recovery: {filename}"
+            )));
+        }
+    }
+    vfs.export_db(filename).map_err(error)
 }
 
 fn import_db<T: DbTransfer>(
@@ -181,7 +221,6 @@ fn import_db<T: DbTransfer>(
     }
 }
 
-#[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
 fn validate_import_db(
     db: &[u8],
 ) -> std::result::Result<(), sqlite_wasm_rs::vfs::transfer::ImportDbError> {
@@ -191,20 +230,23 @@ fn validate_import_db(
     if db.len() < 512 || !db.len().is_multiple_of(512) {
         return Err(ImportDbError::InvalidDbSize);
     }
-    if !db.starts_with(b"SQLite format 3\0") {
-        return Err(ImportDbError::InvalidHeader);
-    }
-    let page_size = u16::from_be_bytes([db[16], db[17]]);
-    let page_size = if page_size == 1 {
-        65536
-    } else {
-        usize::from(page_size)
-    };
-    if !(512..=65536).contains(&page_size) || !page_size.is_power_of_two() {
-        return Err(ImportDbError::InvalidPageSize);
-    }
-    if !db.len().is_multiple_of(page_size) {
-        return Err(ImportDbError::InvalidDbSize);
+    #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
+    {
+        if !db.starts_with(b"SQLite format 3\0") {
+            return Err(ImportDbError::InvalidHeader);
+        }
+        let page_size = u16::from_be_bytes([db[16], db[17]]);
+        let page_size = if page_size == 1 {
+            65536
+        } else {
+            usize::from(page_size)
+        };
+        if !(512..=65536).contains(&page_size) || !page_size.is_power_of_two() {
+            return Err(ImportDbError::InvalidPageSize);
+        }
+        if !db.len().is_multiple_of(page_size) {
+            return Err(ImportDbError::InvalidDbSize);
+        }
     }
     Ok(())
 }

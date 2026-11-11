@@ -76,6 +76,7 @@ pub struct InnerError {
 pub struct SQLiteRunResult {
     pub(crate) embed: bool,
     pub(crate) result: Vec<SQLiteStatementResult>,
+    pub(crate) error: Option<SQLitendError>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,7 +87,6 @@ pub enum SQLiteStatementResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SQLiteStatementTable {
-    pub sql: String,
     pub position: [usize; 2],
     pub values: Option<SQLiteStatementValues>,
 }

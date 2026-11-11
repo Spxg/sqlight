@@ -76,8 +76,7 @@ pub struct SQLiteStatements<'db> {
 }
 
 impl SQLiteStatements<'_> {
-    pub fn results(mut self) -> Result<Vec<SQLiteStatementResult>> {
-        let mut results = Vec::new();
+    pub fn results(mut self, results: &mut Vec<SQLiteStatementResult>) -> Result<()> {
         while self.offset < self.sql.as_bytes().len() {
             let mut handle = std::ptr::null_mut();
             let mut tail = std::ptr::null();
@@ -104,17 +103,13 @@ impl SQLiteStatements<'_> {
                 db: self.db,
                 handle,
             };
-            let sql = unsafe { CStr::from_ptr(sqlite3_sql(handle)) }
-                .to_string_lossy()
-                .into_owned();
             results.push(SQLiteStatementResult::Step(SQLiteStatementTable {
-                sql,
                 position: [start, self.offset],
                 values: statement.values()?,
             }));
         }
         results.push(SQLiteStatementResult::Finish);
-        Ok(results)
+        Ok(())
     }
 }
 

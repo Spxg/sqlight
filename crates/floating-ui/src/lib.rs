@@ -29,6 +29,21 @@ extern "C" {
     ) -> js_sys::Function;
 }
 
+#[wasm_bindgen(inline_js = r#"
+export function viewportSize() {
+    return globalThis.FloatingUIDOM.size({
+        padding: 8,
+        apply({ availableHeight, elements }) {
+            elements.floating.style.maxHeight = `${Math.max(0, availableHeight)}px`;
+        },
+    });
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(js_name = viewportSize)]
+    fn viewport_size() -> JsValue;
+}
+
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ComputePosition {
@@ -54,6 +69,7 @@ pub fn compute_options(offset_value: i32, element: &JsValue) -> JsValue {
     middleware.push(&offset(offset_value));
     middleware.push(&flip());
     middleware.push(&shift());
+    middleware.push(&viewport_size());
     let options = {
         let options = Object::new();
         Reflect::set(&options, &JsValue::from("element"), element).unwrap();
