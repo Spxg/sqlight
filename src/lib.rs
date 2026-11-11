@@ -7,7 +7,7 @@ mod worker_client;
 
 pub use protocol::*;
 pub use send_wrapper::SendWrapper;
-pub(crate) use worker_client::{send_create_and_use, send_request};
+pub(crate) use worker_client::send_request;
 
 use aceditor::EditorError;
 

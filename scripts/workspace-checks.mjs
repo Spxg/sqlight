@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { chooseFiles, downloadDatabase } from './files-helpers.mjs';
+import {
+  chooseFiles, closeFiles, databaseGroup, downloadDatabase,
+  openFiles, waitForFilesIdle,
+} from './files-helpers.mjs';
 
 export async function checkWorkspaces(page) {
   const context = await page.context().browser().newContext();
@@ -193,27 +196,24 @@ export async function checkWorkspaces(page) {
   }
 
   async function createDatabase(filename, duplicate = false) {
-    const menu = await workspaceMenu();
-    const name = menu.getByRole('textbox', { name: 'New database name', exact: true });
+    const before = await config();
+    const drawer = await openFiles(workspacePage);
+    const name = drawer.getByRole('textbox', { name: 'New database name', exact: true });
     await name.fill(filename);
-    await menu.getByRole('button', { name: 'Create and use', exact: true }).click();
+    await drawer.getByRole('button', { name: 'Create database', exact: true }).click();
     if (duplicate) {
-      await workspacePage.getByRole('tab', { name: 'Status', selected: true }).waitFor();
-      await menu.getByRole('alert').filter({
+      await drawer.getByRole('alert').filter({
         hasText: `Database already exists: ${filename}`,
       }).waitFor();
       assert.equal(await name.inputValue(), filename);
     } else {
-      await workspacePage.waitForFunction(
-        (filename) => JSON.parse(localStorage.getItem('config'))?.database === filename,
-        filename,
-      );
-      assert.equal(await name.inputValue(), '');
+      await databaseGroup(drawer, filename).waitFor();
     }
-    await workspacePage.waitForFunction(() =>
-      !document.querySelector('input[aria-label="Read only"]').disabled,
-    );
-    await closeMenu();
+    await waitForFilesIdle(workspacePage, drawer);
+    if (!duplicate) assert.equal(await name.inputValue(), '');
+    assert.deepEqual(await config(), before, 'Creating a file preserves the workspace');
+    await closeFiles(workspacePage);
+    if (!duplicate) await selectDatabase(filename);
   }
 
   async function expectSettingChangeRejected() {

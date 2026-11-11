@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { unzipSync, zipSync } from 'fflate';
+import { Unzip, UnzipInflate, unzipSync, zipSync } from 'fflate';
 import {
   chooseFiles, closeFiles, downloadDatabase, downloadDatabases, openFiles,
 } from './files-helpers.mjs';
@@ -9,6 +9,23 @@ const loggedDatabases = await readFile(
   new URL('./fixtures/logged-databases.zip', import.meta.url),
 );
 const fixture = unzipSync(loggedDatabases);
+
+function streamUnzip(data) {
+  const files = new Map();
+  const archive = new Unzip((file) => {
+    assert.equal(files.has(file.name), false, `ZIP contains ${file.name} only once`);
+    const chunks = [];
+    file.ondata = (error, chunk, final) => {
+      if (error) throw error;
+      chunks.push(Buffer.from(chunk));
+      if (final) files.set(file.name, Buffer.concat(chunks));
+    };
+    file.start();
+  });
+  archive.register(UnzipInflate);
+  archive.push(data, true);
+  return files;
+}
 
 export async function checkArchives(page) {
   const context = await page.context().browser().newContext();
@@ -109,18 +126,19 @@ export async function checkArchives(page) {
 
   async function download(filename, format = 'zip') {
     const before = await settings();
-    const result = filename === ''
-      ? await downloadDatabases(archivePage)
+    const result = Array.isArray(filename) || filename === ''
+      ? await downloadDatabases(archivePage, filename || undefined)
       : await downloadDatabase(archivePage, filename, format);
     assert.deepEqual(await settings(), before, 'Download preserves this workspace and draft');
     return result;
   }
 
   function expectEntries(archive, expected) {
-    const entries = unzipSync(archive);
-    assert.deepEqual(Object.keys(entries).sort(), Object.keys(expected).sort());
-    for (const [name, data] of Object.entries(expected)) {
-      assert.deepEqual(Buffer.from(entries[name]), Buffer.from(data), `${name} keeps its bytes`);
+    const entries = streamUnzip(archive);
+    const files = expected instanceof Map ? expected : new Map(Object.entries(expected));
+    assert.deepEqual([...entries.keys()].sort(), [...files.keys()].sort());
+    for (const [name, data] of files) {
+      assert.deepEqual(entries.get(name), Buffer.from(data), `${name} keeps its bytes`);
     }
   }
 
@@ -220,6 +238,22 @@ export async function checkArchives(page) {
         (SELECT sum(value) FROM hot.records) AS recovered_sum;
       DETACH hot;`);
     assert.deepEqual(await archivePage.locator('tbody td').allTextContents(), ['83', '80']);
+
+    // Valid filenames must never turn into JavaScript object keys or prototypes.
+    const specialFiles = new Map([
+      ['__proto__', anchor.data],
+      ['length', anchor.data],
+    ]);
+    await load([...specialFiles]);
+    const specialArchive = await download([...specialFiles.keys()]);
+    expectEntries(specialArchive.data, specialFiles);
+    await load([['special-names.zip', specialArchive.data]], { replace: true });
+    for (const filename of specialFiles.keys()) {
+      await selectDatabase(filename);
+      await run('SELECT value FROM anchor;');
+      await archivePage.getByRole('cell', { name: '1173', exact: true }).waitFor();
+    }
+    expectEntries((await download([...specialFiles.keys()])).data, specialFiles);
   } finally {
     await context.close();
   }

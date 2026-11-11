@@ -28,7 +28,7 @@ export async function checkWorkspaceMenuPosition(page) {
       };
       const snapshot = () => ({
         reference: box([...document.querySelectorAll('#header button')]
-          .find((button) => button.textContent.startsWith('Workspace: '))),
+          .find((button) => button.getAttribute('aria-label')?.startsWith('Workspace: '))),
         dialog: box(document.querySelector('[role="dialog"]')),
         checkbox: box(document.querySelector('input[aria-label="Read only"]')),
         headerHeight: document.getElementById('header').getBoundingClientRect().height,
@@ -88,6 +88,13 @@ export async function checkWorkspaceMenuPosition(page) {
       await menuPage.waitForFunction(() =>
         !document.querySelector('input[aria-label="Read only"]').disabled,
       );
+      if (index === 0) {
+        assert.doesNotMatch(await workspaceButton.innerText(), /workspace:/i);
+        assert.equal(await menu.evaluate((element) => document.activeElement === element), true);
+        await menuPage.keyboard.press('Tab');
+        assert.equal(await menu.getByRole('combobox', { name: 'Workspace', exact: true })
+          .evaluate((element) => document.activeElement === element), true);
+      }
       if (index === 1) {
         await menu.getByRole('textbox', { name: 'Workspace name', exact: true })
           .fill('A long workspace name that must keep its menu in place');

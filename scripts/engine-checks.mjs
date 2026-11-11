@@ -644,10 +644,19 @@ async function checkWorkerContext(page) {
           await sql(
             `PRAGMA key='smoke-key';
             CREATE TABLE secret(value);
-            INSERT INTO secret VALUES (456);`,
+            INSERT INTO secret VALUES (456);
+            CREATE TEMP TABLE legacy_download_marker(value);
+            INSERT INTO legacy_download_marker VALUES (654);
+            PRAGMA cache_size=-876;`,
           );
           const encrypted = unwrap(await request('DownloadDb'));
           encryptedHeader(encrypted.data);
+          const preserved = await sql(`SELECT value FROM secret;
+            SELECT value AS marker FROM legacy_download_marker; PRAGMA cache_size;`);
+          if (value(preserved, 'value') !== '456' || value(preserved, 'marker') !== '654'
+            || value(preserved, 'cache_size') !== '-876') {
+            throw new Error(`${engine}: Legacy download reset the connection or encryption key`);
+          }
           unwrap(await request({ LoadDb: { data: encrypted.data } }));
           if (engine === 'sqlcipher') {
             // PRAGMA key alone succeeds even with a wrong passphrase. Reading
@@ -850,6 +859,11 @@ async function checkWorkerContext(page) {
           }));
           if (JSON.stringify(loaded) !== JSON.stringify([aName, bName]))
             throw new Error(`${engine}: Batch upload did not preserve database names`);
+          const legacy = unwrap(await request('DownloadDb'));
+          if (legacy.filename !== source.filename || legacy.data.length !== second.length
+            || legacy.data.some((byte, index) => byte !== second[index])) {
+            throw new Error(`${engine}: Legacy download changed the current database`);
+          }
           const downloadedB = unwrap(await request({ DownloadFile: bName }));
           if (downloadedB.filename !== bName || downloadedB.data.length !== second.length
             || downloadedB.data.some((byte, index) => byte !== second[index])) {
@@ -881,6 +895,35 @@ async function checkWorkerContext(page) {
             || names.includes('duplicate.db') || names.includes('not-written.db') || names.includes('orphan-good.db')) {
             throw new Error(`${engine}: Batch validation left a partial import`);
           }
+          const longMain = `${'名'.repeat(163)}.db`;
+          const oversizedMain = `${'名'.repeat(166)}.db`;
+          for (const files of [
+            [{ filename: aName, data: second }, { filename: oversizedMain, data: first }],
+            [{ filename: aName, data: second }, { filename: longMain, data: first },
+              { filename: `${longMain}-journal`, data: new Uint8Array() }],
+          ]) {
+            const rejected = await request({ LoadDbs: { files, replace: true } });
+            if (!/499 UTF-8 bytes/.test(rejected.LoadDbs.Err?.LoadDb ?? ''))
+              throw new Error(`${engine}: Import did not preflight the transfer filename limit`);
+            const retained = unwrap(await request({ DownloadFile: aName })).data;
+            if (retained.length !== first.length || retained.some((byte, index) => byte !== first[index])
+              || unwrap(await request('ListDbs')).includes(longMain)) {
+              throw new Error(`${engine}: A later oversized filename partially replaced the import batch`);
+            }
+          }
+          unwrap(await request({ CreateScratch: longMain }));
+          unwrap(await request({ Open: { filename: longMain } }));
+          await sql(`PRAGMA journal_mode=PERSIST;
+            CREATE TABLE long_name(value); INSERT INTO long_name VALUES (42);`);
+          const longSnapshot = unwrap(await request('ListFiles'));
+          const longJournal = longSnapshot.files.find((file) => file.filename === `${longMain}-journal`);
+          if (!longJournal?.size)
+            throw new Error(`${engine}: File listing could not read a long generated journal name`);
+          const longBundle = unwrap(await request({ DownloadBundle: [longMain] }));
+          const journal = longBundle.files.find((file) => file.filename === `${longMain}-journal`);
+          if (journal?.data.length !== longJournal.size)
+            throw new Error(`${engine}: Bundle download omitted a long generated journal`);
+          unwrap(await request({ Open: source }));
           const journalMagic = new Uint8Array([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
           const superName = new TextEncoder().encode('/tmp/目录/main.db-mj1234569ab');
           const superJournal = new Uint8Array(512 + superName.length + 16);

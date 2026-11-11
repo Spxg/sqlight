@@ -7,7 +7,7 @@ import { chromium } from 'playwright';
 import { checkEditor } from './editor-checks.mjs';
 import { checkEngineSelection, checkWorkers } from './engine-checks.mjs';
 import { checkExecutionProgress } from './loading-checks.mjs';
-import { checkInteractions } from './interaction-checks.mjs';
+import { checkInteractions, checkWorkerRecovery } from './interaction-checks.mjs';
 import { checkBatchFailures, checkResultPaging } from './result-checks.mjs';
 import { checkSharing } from './share-checks.mjs';
 import { checkWorkspaces } from './workspace-checks.mjs';
@@ -85,7 +85,7 @@ async function closeMenu() {
 try {
   await page.goto(origin);
   await page.waitForFunction(() =>
-    globalThis.ace?.edit('ace_editor').getValue().includes('demo_books'),
+    globalThis.ace?.edit('ace_editor').getValue().includes('CREATE TABLE IF NOT EXISTS blobs'),
   );
   await page.getByRole('button', { name: 'Run', exact: true }).click();
   await page.getByText('Finished', { exact: true }).waitFor();
@@ -94,16 +94,16 @@ try {
   );
   const exampleTables = page.getByRole('table');
   assert.equal(await exampleTables.count(), 2);
-  assert.equal(await exampleTables.first().locator('tbody tr').count(), 4);
-  assert.deepEqual(
-    await exampleTables
-      .last()
-      .locator('tbody tr')
-      .last()
-      .locator('td')
-      .allTextContents(),
-    ["'Small, Fast, Reliable'", '0', '0'],
-  );
+  assert.equal(await exampleTables.first().locator('tbody tr').count(), 1);
+  const greeting = await exampleTables.first().locator('tbody td').allTextContents();
+  assert.equal(greeting[0], "'Hello World!'");
+  assert.match(greeting[1], /^'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'$/);
+  assert.equal(greeting[2], "x'73716c69676874'");
+  assert.equal(greeting[3], 'NULL');
+  assert.equal(await exampleTables.last().locator('tbody tr').count(), 1);
+  const blob = await exampleTables.last().locator('tbody td').allTextContents();
+  assert.equal(blob[0], '1');
+  assert.match(blob[1], /^x'[0-9a-f]{24}'$/i);
   await checkExecutionProgress(page);
 
   // Changes are saved even when the SQL has never been run.
@@ -273,6 +273,7 @@ try {
   await checkResultPaging(page);
   await checkBatchFailures(page);
   await checkInteractions(page);
+  await checkWorkerRecovery(page);
   await checkSharing(page);
   await checkWorkspaceMenuPosition(page);
   await checkWorkspaces(page);

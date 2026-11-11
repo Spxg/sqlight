@@ -22,5 +22,5 @@ pub(crate) async fn pack_zip(files: &[DatabaseFile]) -> Result<Uint8Array, JsVal
     let files = serde_wasm_bindgen::to_value(files)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     let data = JsFuture::from(pack_zip_files(files)?).await?;
-    Ok(Uint8Array::new(&data))
+    data.dyn_into()
 }

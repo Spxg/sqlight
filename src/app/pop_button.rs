@@ -16,6 +16,7 @@ pub fn PopButton<B, M>(
     button: B,
     menu: M,
     #[prop(optional)] menu_container: NodeRef<html::element::Div>,
+    #[prop(optional)] label: Option<&'static str>,
 ) -> impl IntoView
 where
     B: FnOnce(Box<dyn FnMut(MouseEvent) + Send>, NodeRef<html::element::Button>) -> AnyView,
@@ -27,6 +28,15 @@ where
     let arrow_ref = NodeRef::<html::element::Div>::new();
     let content_ref = NodeRef::<html::element::Div>::new();
 
+    Effect::new(move || {
+        if is_open.get()
+            && let Some(content) = content_ref.get()
+            && content.is_connected()
+        {
+            let _ = content.focus();
+        }
+    });
+
     let keyboard = window_event_listener(ev::keydown, move |event| {
         if is_open.get_untracked() && event.key() == "Escape" {
             set_open.set(false);
@@ -36,7 +46,8 @@ where
         }
     });
     let outside_click = window_event_listener(ev::click, move |event| {
-        if !is_open.get_untracked() {
+        // File pickers and downloads dispatch programmatic clicks outside the popup.
+        if !is_open.get_untracked() || !event.is_trusted() {
             return;
         }
         let target = event
@@ -156,7 +167,13 @@ where
                             <path stroke="none" d="M0,0 H20 L10,10 Z"></path>
                         </svg>
                     </div>
-                    <div node_ref=content_ref class=styles::contentBottom role="dialog">
+                    <div
+                        node_ref=content_ref
+                        class=styles::contentBottom
+                        role="dialog"
+                        aria-label=label
+                        tabindex="-1"
+                    >
                         {menu(set_open)}
                     </div>
                 </div>

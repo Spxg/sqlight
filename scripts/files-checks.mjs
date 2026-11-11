@@ -104,10 +104,10 @@ export async function checkFiles(page) {
   }
 
   async function useFile(filename) {
-    const drawer = await openFiles(filesPage);
-    await databaseGroup(drawer, filename)
-      .getByRole('button', { name: 'Use as main', exact: true }).click();
-    await closeFiles(filesPage);
+    const menu = await workspaceMenu();
+    await menu.getByRole('combobox', { name: 'Main database', exact: true })
+      .selectOption(filename);
+    await closeWorkspace();
     await filesPage.waitForFunction(
       (filename) => JSON.parse(localStorage.getItem('config'))?.database === filename,
       filename,
@@ -155,7 +155,7 @@ export async function checkFiles(page) {
     await closeWorkspace();
     await run('CREATE TABLE active(value INTEGER); INSERT INTO active VALUES (1);');
 
-    // Files selection changes the workspace; it does not open another connection.
+    // Selecting a workspace's main file does not open another connection.
     menu = await workspaceMenu();
     await menu.getByRole('button', { name: /^New workspace/ }).click();
     await closeWorkspace();
@@ -206,6 +206,30 @@ export async function checkFiles(page) {
     await filesPage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
     await expectMissing('default.db');
 
+    // A missing default must not hide or discard another connection's transaction.
+    await createFile('connection-guard.db');
+    menu = await workspaceMenu();
+    await menu.getByRole('button', { name: /^New workspace/ }).click();
+    await closeWorkspace();
+    await useFile('connection-guard.db');
+    await run(`CREATE TABLE connection_guard(value INTEGER);
+      INSERT INTO connection_guard VALUES (1);
+      BEGIN; INSERT INTO connection_guard VALUES (2);`);
+    menu = await workspaceMenu();
+    await menu.getByRole('combobox', { name: 'Workspace', exact: true }).selectOption('default');
+    await closeWorkspace();
+    await edit('SELECT 1195 AS blocked_switch;');
+    await filesPage.getByRole('button', { name: 'Run', exact: true }).click();
+    await filesPage.getByRole('tab', { name: 'Status', selected: true }).waitFor();
+    await filesPage.getByRole('tabpanel').getByText(/Run COMMIT or ROLLBACK/).waitFor();
+    const restored = await config();
+    assert.equal(restored.database, 'connection-guard.db');
+    assert.equal(restored.keep_ctx, true);
+    await run('ROLLBACK; SELECT count(*) AS kept_rows FROM connection_guard;');
+    await filesPage.getByRole('cell', { name: '1', exact: true }).waitFor();
+    await disconnect();
+    await deleteFile('connection-guard.db');
+
     // Corrupt databases and hot journals can be managed without opening SQLite.
     const logs = await readFile(new URL('./fixtures/logged-databases.zip', import.meta.url));
     const corrupt = Buffer.from(empty.data);
@@ -216,6 +240,10 @@ export async function checkFiles(page) {
     await hot.locator('summary').click();
     await hot.getByText('hot.db-journal', { exact: true }).waitFor();
     assert.match(await hot.innerText(), /\d+.*(B|KiB|KB)/);
+    await drawer.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await waitForFilesIdle(filesPage, drawer);
+    assert.equal(await hot.locator('details').evaluate((element) => element.open), true,
+      'Refreshing file metadata preserves expanded logs');
     await closeFiles(filesPage);
     const hotArchive = unzipSync((await downloadDatabase(filesPage, 'hot.db', 'zip')).data);
     const originals = unzipSync(logs);

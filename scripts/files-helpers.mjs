@@ -7,9 +7,9 @@ export async function waitForFilesIdle(page, drawer) {
 }
 
 export async function openFiles(page) {
-  const drawer = page.getByRole('dialog', { name: 'Files', exact: true });
+  const drawer = page.getByRole('dialog', { name: 'Database', exact: true });
   if (!await drawer.isVisible()) {
-    await page.getByRole('button', { name: 'Files', exact: true }).click();
+    await page.getByRole('button', { name: 'Database', exact: true }).click();
   }
   await drawer.waitFor();
   await drawer.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -18,9 +18,9 @@ export async function openFiles(page) {
 }
 
 export async function closeFiles(page) {
-  const drawer = page.getByRole('dialog', { name: 'Files', exact: true });
+  const drawer = page.getByRole('dialog', { name: 'Database', exact: true });
   if (await drawer.isVisible()) {
-    await drawer.getByRole('button', { name: 'Close Files', exact: true }).click();
+    await page.keyboard.press('Escape');
     await drawer.waitFor({ state: 'hidden' });
   }
 }
@@ -38,6 +38,7 @@ export async function chooseFiles(page, files) {
     mimeType: name.endsWith('.zip') ? 'application/zip' : 'application/vnd.sqlite3',
     buffer: Buffer.from(buffer),
   })));
+  await waitForFilesIdle(page, drawer);
   await closeFiles(page);
 }
 

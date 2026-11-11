@@ -19,6 +19,7 @@ pub fn Button<C>(
     #[prop(default = false)] is_primary: bool,
     #[prop(default = false)] is_small: bool,
     #[prop(optional, into)] disabled: Signal<bool>,
+    #[prop(optional, into)] aria_label: Signal<Option<String>>,
     #[prop(optional)] icon_left: Option<AnyView>,
     #[prop(optional)] icon_right: Option<AnyView>,
     #[prop(optional)] node_ref: NodeRef<html::element::Button>,
@@ -50,6 +51,7 @@ where
             type="button"
             class=class
             disabled=move || disabled.get()
+            aria-label=move || aria_label.get()
             on:click=on_click
             node_ref=node_ref
         >

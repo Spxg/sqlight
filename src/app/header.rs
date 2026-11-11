@@ -14,7 +14,7 @@ use crate::{
         ImportProgress,
         button_set::{Button, ButtonSet, LinkButton},
         config_menu::ConfigMenu,
-        files::FilesDrawer,
+        files::DatabaseMenu,
         icon::{build_icon, config_icon, expandable_icon, github_icon},
         output::change_focus,
         pop_button::PopButton,
@@ -46,7 +46,9 @@ pub fn Header() -> impl IntoView {
                     <ButtonSet>
                         <WorkspaceMenuButton menu_container=menu_container />
                     </ButtonSet>
-
+                    <ButtonSet>
+                        <DatabaseButton input_ref=input_ref menu_container=menu_container />
+                    </ButtonSet>
                 </div>
                 <div class=styles::right>
                     <input
@@ -59,9 +61,6 @@ pub fn Header() -> impl IntoView {
 
                     <ButtonSet>
                         <ShareButton />
-                    </ButtonSet>
-                    <ButtonSet>
-                        <FilesButton input_ref=input_ref />
                     </ButtonSet>
                     <ButtonSet>
                         <ToolsButton menu_container=menu_container />
@@ -139,8 +138,16 @@ fn WorkspaceMenuButton(menu_container: NodeRef<html::element::Div>) -> impl Into
     let state = expect_context::<Store<GlobalState>>();
     let button = move |toggle, node_ref| {
         view! {
-            <Button icon_right=expandable_icon() on_click=toggle node_ref=node_ref>
-                "Workspace: "
+            <Button
+                icon_right=expandable_icon()
+                on_click=toggle
+                node_ref=node_ref
+                aria_label=Signal::derive(move || Some(format!(
+                    "Workspace: {} ({})",
+                    state.workspace_name().get(),
+                    if state.read_only().get() { "Read only" } else { "Read write" },
+                )))
+            >
                 <span class=styles::workspaceName>{move || state.workspace_name().get()}</span>
                 " "
                 <span class=styles::workspaceMode>
@@ -283,9 +290,11 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
 }
 
 #[component]
-fn FilesButton(input_ref: NodeRef<Input>) -> impl IntoView {
+fn DatabaseButton(
+    input_ref: NodeRef<Input>,
+    menu_container: NodeRef<html::element::Div>,
+) -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
-    let trigger = NodeRef::<html::element::Button>::new();
     let upload = Callback::new(move |_| {
         if !state.is_busy().get_untracked()
             && let Some(input) = input_ref.get_untracked()
@@ -294,16 +303,6 @@ fn FilesButton(input_ref: NodeRef<Input>) -> impl IntoView {
             input.click();
         }
     });
-    Effect::new(move || {
-        let open = state.files_open().get();
-        if let Some(button) = trigger.get() {
-            button.set_attribute("aria-haspopup", "dialog").unwrap();
-            button
-                .set_attribute("aria-expanded", if open { "true" } else { "false" })
-                .unwrap();
-        }
-    });
-
     Effect::new(move || {
         state.exported().track();
 
@@ -338,9 +337,22 @@ fn FilesButton(input_ref: NodeRef<Input>) -> impl IntoView {
         );
     });
 
+    let button = |toggle, node_ref| {
+        view! {
+            <Button icon_right=expandable_icon() on_click=toggle node_ref=node_ref>
+                "Database"
+            </Button>
+        }
+        .into_any()
+    };
+
     view! {
-        <Button node_ref=trigger on_click=move |_| state.files_open().set(true)>"Files"</Button>
-        <FilesDrawer upload=upload trigger=trigger />
+        <PopButton
+            button=button
+            menu=Box::new(move |_close| view! { <DatabaseMenu upload=upload /> }.into_any())
+            menu_container=menu_container
+            label="Database"
+        />
     }
 }
 

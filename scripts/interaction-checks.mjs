@@ -1,4 +1,89 @@
 import assert from 'node:assert/strict';
+import { closeFiles, openFiles, waitForFilesIdle } from './files-helpers.mjs';
+
+export async function checkWorkerRecovery(page) {
+  const context = await page.context().browser().newContext();
+  const origin = new URL(page.url()).origin;
+  await context.route('**/*', (route) =>
+    route.request().url().startsWith(origin) ? route.continue() : route.abort(),
+  );
+  await context.addInitScript(() => {
+    const NativeWorker = globalThis.Worker;
+    const state = { created: 0, failSnapshot: false, requests: [] };
+    globalThis.__workerRecoveryCheck = state;
+    globalThis.Worker = class extends NativeWorker {
+      constructor(...args) {
+        super(...args);
+        state.created++;
+      }
+
+      postMessage(request, ...rest) {
+        state.requests.push(typeof request === 'string' ? request : Object.keys(request)[0]);
+        if (request === 'ListFiles' && state.failSnapshot) {
+          state.failSnapshot = false;
+          queueMicrotask(() => this.dispatchEvent(new ErrorEvent('error', {
+            message: 'snapshot failure fixture',
+          })));
+          return;
+        }
+        super.postMessage(request, ...rest);
+      }
+    };
+  });
+  const recoveryPage = await context.newPage();
+  recoveryPage.setDefaultTimeout(20_000);
+
+  async function run(sql) {
+    await recoveryPage.evaluate((sql) => ace.edit('ace_editor').setValue(sql, -1), sql);
+    await recoveryPage.getByRole('button', { name: 'Run', exact: true }).click();
+  }
+
+  try {
+    await recoveryPage.goto(origin);
+    await recoveryPage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
+    await recoveryPage.evaluate(() => { globalThis.__workerRecoveryCheck.failSnapshot = true; });
+    await run(`CREATE TABLE recovery_probe(value INTEGER);
+      INSERT INTO recovery_probe VALUES (2713);
+      SELECT value FROM recovery_probe;`);
+    await recoveryPage.getByText('Worker communication failed: snapshot failure fixture', {
+      exact: true,
+    }).waitFor();
+    assert.equal(await recoveryPage.getByRole('button', { name: 'Run', exact: true }).isEnabled(), true);
+    await recoveryPage.getByRole('tab', { name: 'Execution', exact: true }).click();
+    await recoveryPage.getByRole('cell', { name: '2713', exact: true }).waitFor();
+    await recoveryPage.getByText('Finished', { exact: true }).waitFor();
+
+    await recoveryPage.getByRole('button', { name: /^Workspace: / }).click();
+    await recoveryPage.getByRole('checkbox', { name: 'Fresh database per run', exact: true }).uncheck();
+    await recoveryPage.keyboard.press('Escape');
+    await recoveryPage.getByRole('dialog').waitFor({ state: 'hidden' });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await run('SELECT value FROM recovery_probe;');
+      await recoveryPage.getByRole('cell', { name: '2713', exact: true }).waitFor();
+      await recoveryPage.getByText('Finished', { exact: true }).waitFor();
+    }
+    const state = await recoveryPage.evaluate(() => globalThis.__workerRecoveryCheck);
+    assert.equal(state.created, 2, 'A snapshot transport error replaces the worker');
+    assert.equal(state.requests.filter((request) => request === 'BootstrapDefault').length, 1,
+      'Running an existing default database does not repeat initialization');
+
+    // A failed explicit refresh must also discard stale connection/file badges.
+    const database = await openFiles(recoveryPage);
+    await database.getByText('Connected', { exact: true }).waitFor();
+    await recoveryPage.evaluate(() => { globalThis.__workerRecoveryCheck.failSnapshot = true; });
+    await database.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await waitForFilesIdle(recoveryPage, database);
+    assert.equal(await database.getByRole('region').count(), 0);
+    assert.equal(await database.getByRole('button', { name: 'Disconnect', exact: true }).isDisabled(), true);
+    await closeFiles(recoveryPage);
+    await run('SELECT value FROM recovery_probe;');
+    await recoveryPage.getByRole('cell', { name: '2713', exact: true }).waitFor();
+    await recoveryPage.getByText('Finished', { exact: true }).waitFor();
+    assert.equal(await recoveryPage.evaluate(() => globalThis.__workerRecoveryCheck.created), 3);
+  } finally {
+    await context.close();
+  }
+}
 
 export async function checkInteractions(page) {
   const viewport = page.viewportSize();

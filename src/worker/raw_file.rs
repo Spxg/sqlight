@@ -13,6 +13,16 @@ pub(super) struct ReadOnlyFile {
 
 impl ReadOnlyFile {
     pub fn open(filename: &str) -> Result<Self> {
+        let kind = if filename.ends_with("-journal") {
+            SQLITE_OPEN_MAIN_JOURNAL
+        } else if filename.ends_with("-wal") {
+            SQLITE_OPEN_WAL
+        } else if filename.ends_with("-shm") {
+            // SHM is copied as a raw file; this VFS does not use xShm methods.
+            0
+        } else {
+            SQLITE_OPEN_MAIN_DB
+        };
         let vfs = unsafe { sqlite3_vfs_find(c"opfs".as_ptr()) };
         if vfs.is_null() {
             return Err(WorkerError::DownloadDb(
@@ -52,7 +62,7 @@ impl ReadOnlyFile {
                 vfs,
                 filename,
                 handle,
-                SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB,
+                SQLITE_OPEN_READONLY | kind,
                 std::ptr::null_mut(),
             )
         };

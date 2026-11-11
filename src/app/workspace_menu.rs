@@ -4,7 +4,7 @@ use reactive_stores::Store;
 use web_sys::Event;
 
 use crate::{
-    SQLightError, WorkerError, WorkerRequest,
+    WorkerRequest,
     app::{
         Engine, GlobalState, GlobalStateStoreFields,
         button_set::{Button, ButtonSet},
@@ -14,7 +14,7 @@ use crate::{
         menu_group::MenuGroup,
         new_workspace, rename_workspace, switch_workspace, use_database,
     },
-    send_create_and_use, send_request,
+    send_request,
 };
 
 istyles!(
@@ -26,17 +26,10 @@ istyles!(
 pub fn WorkspaceMenu() -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
     let name = RwSignal::new(state.workspace_name().get_untracked());
-    let database_name = RwSignal::new(String::new());
     let busy = Signal::derive(move || state.is_busy().get());
     let refreshed = StoredValue::new(None::<(String, Engine)>);
 
     Effect::new(move || name.set(state.workspace_name().get()));
-    Effect::new(move || {
-        let database = state.database().get();
-        if database_name.get_untracked().trim() == database {
-            database_name.set(String::new());
-        }
-    });
     Effect::new(move || {
         let key = (state.workspace_id().get(), state.engine().get());
         if !busy.get() && refreshed.get_value().as_ref() != Some(&key) {
@@ -46,19 +39,6 @@ pub fn WorkspaceMenu() -> impl IntoView {
             send_request(state, WorkerRequest::ListFiles);
         }
     });
-
-    let create_database = move || {
-        let filename = database_name.get_untracked().trim().to_owned();
-        if !busy.get_untracked() && !filename.is_empty() {
-            send_create_and_use(state, filename);
-        }
-    };
-    let create_error = move || {
-        state.last_error().with(|error| match error.as_deref() {
-            Some(SQLightError::Worker(WorkerError::CreateDb(message))) => Some(message.clone()),
-            _ => None,
-        })
-    };
 
     let options = move || {
         let mut workspaces = vec![(state.workspace_id().get(), state.workspace_name().get())];
@@ -162,7 +142,7 @@ pub fn WorkspaceMenu() -> impl IntoView {
                 disabled=busy
                 aside=Some(view! {
                     <MenuAside>
-                        "Choose the main database from files stored persistently in this browser’s OPFS for this site."
+                        "Choose a database created or uploaded in Database. This selection is saved with the workspace."
                     </MenuAside>
                 }.into_any())
                 on_change=move |event: Event| {
@@ -171,38 +151,6 @@ pub fn WorkspaceMenu() -> impl IntoView {
             >
                 {databases}
             </Select>
-            <div class=styles::databaseCreate>
-                <input
-                    type="text"
-                    class=styles::input
-                    aria-label="New database name"
-                    placeholder="New database name"
-                    prop:value=move || database_name.get()
-                    disabled=move || busy.get()
-                    on:input=move |event| database_name.set(event_target_value(&event))
-                    on:keydown=move |event| {
-                        if event.key() == "Enter" {
-                            event.prevent_default();
-                            create_database();
-                        }
-                    }
-                />
-                <ButtonSet>
-                    <Button
-                        is_small=true
-                        disabled=Signal::derive(move || {
-                            busy.get() || database_name.get().trim().is_empty()
-                        })
-                        on_click=move |_| create_database()
-                    >
-                        "Create and use"
-                    </Button>
-                </ButtonSet>
-            </div>
-            <MenuAside>"Creates an empty database and selects it as this workspace’s main database."</MenuAside>
-            {move || create_error().map(|message| view! {
-                <p class=styles::databaseError role="alert">{message}</p>
-            })}
             <ConfigElement
                 name="Read only".into()
                 aside=Some(view! {

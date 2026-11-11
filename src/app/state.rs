@@ -46,8 +46,6 @@ pub struct GlobalState {
     #[serde(skip)]
     files: Option<FileSnapshot>,
     #[serde(skip)]
-    files_open: bool,
-    #[serde(skip)]
     opened_focus: HashSet<Focus>,
     #[serde(skip)]
     share_href: Option<String>,
@@ -86,7 +84,6 @@ impl Default for GlobalState {
             is_busy: false,
             databases: vec![],
             files: None,
-            files_open: false,
             opened_focus: HashSet::new(),
             share_href: None,
             show_something: false,

@@ -71,7 +71,7 @@ pub enum WorkerResponse {
     DownloadBundle(Result<DownloadBundleResponse>),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileInfo {
     pub filename: String,
     pub size: u64,

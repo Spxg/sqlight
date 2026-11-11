@@ -8,6 +8,10 @@
   }
 }
 
+.wide {
+  width: min(56em, calc(100vw - 2em));
+}
+
 .title {
   margin: 0;
   border-bottom: 1px solid var(--header-main-border);

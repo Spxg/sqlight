@@ -64,14 +64,14 @@ fn error_details(error: &SQLightError) -> &'static str {
                 replacing connected databases, or deleting files."
             }
             WorkerError::MissingDatabase(_) => {
-                "Open Files to upload or create this database, or choose another main database \
+                "Open Database to upload or create this database, or choose another main database \
                 in the workspace settings. Your SQL draft is preserved."
             }
             WorkerError::FilesInUse(_) => {
-                "Disconnect the SQL connection in Files before deleting its main or attached databases."
+                "Disconnect the SQL connection in Database before deleting its main or attached databases."
             }
             WorkerError::Filesystem(_) => {
-                "Open Files, refresh the file list, and try the operation again."
+                "Open Database, refresh the file list, and try the operation again."
             }
             WorkerError::OpfsSAHPoolOpened => {
                 "OPFS storage is already open in another browser tab. \

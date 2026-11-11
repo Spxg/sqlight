@@ -12,7 +12,7 @@ use crate::{
     WorkerRequest, WorkerResponse,
     app::{
         Engine, Exported, Focus, GlobalState, GlobalStateStoreFields, change_focus,
-        embed_query_result, use_database,
+        embed_query_result,
     },
 };
 
@@ -104,14 +104,6 @@ fn transport_error(error: wasm_bindgen::JsValue) -> WorkerError {
 }
 
 pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
-    dispatch(state, request, false);
-}
-
-pub(crate) fn send_create_and_use(state: Store<GlobalState>, filename: String) {
-    dispatch(state, WorkerRequest::CreateDb(filename), true);
-}
-
-fn dispatch(state: Store<GlobalState>, request: WorkerRequest, create_and_use: bool) {
     let running = matches!(request, WorkerRequest::Run(_));
     let importing = matches!(
         request,
@@ -162,28 +154,32 @@ fn dispatch(state: Store<GlobalState>, request: WorkerRequest, create_and_use: b
                 *session = Some(WorkerSession::start(uri).await?);
             }
             let worker = session.as_mut().unwrap();
-            if running && (options.filename == "default.db" || pending_database) {
-                let initialization = if options.filename == "default.db" {
-                    WorkerRequest::BootstrapDefault
-                } else {
-                    WorkerRequest::CreateScratch(options.filename.clone())
-                };
-                match worker.request(initialization).await? {
-                    WorkerResponse::BootstrapDefault(result) => {
-                        initialized = result.is_ok()
-                            || matches!(result, Err(WorkerError::MissingDatabase(_)));
-                        result?;
-                    }
-                    WorkerResponse::CreateScratch(result) => {
-                        initialized = result.is_ok()
-                            || matches!(result, Err(WorkerError::MissingDatabase(_)));
-                        result?;
-                    }
-                    _ => return Err(WorkerError::Unexpected),
-                }
-            }
             if needs_connection {
-                worker.connect(options).await?;
+                match worker.connect(options.clone()).await {
+                    Err(WorkerError::MissingDatabase(_))
+                        if running && (options.filename == "default.db" || pending_database) =>
+                    {
+                        let initialization = if options.filename == "default.db" {
+                            WorkerRequest::BootstrapDefault
+                        } else {
+                            WorkerRequest::CreateScratch(options.filename.clone())
+                        };
+                        let result = match worker.request(initialization).await? {
+                            WorkerResponse::BootstrapDefault(result) => result,
+                            WorkerResponse::CreateScratch(result) => result.map(|_| ()),
+                            _ => return Err(WorkerError::Unexpected),
+                        };
+                        initialized = pending_database
+                            && (result.is_ok()
+                                || matches!(result, Err(WorkerError::MissingDatabase(_))));
+                        result?;
+                        worker.connect(options).await?;
+                    }
+                    result => result?,
+                }
+                if running && pending_database {
+                    initialized = true;
+                }
             }
             worker.request(request).await
         }
@@ -191,6 +187,7 @@ fn dispatch(state: Store<GlobalState>, request: WorkerRequest, create_and_use: b
 
         // The filesystem snapshot also supplies the actual connection after an import,
         // failed switch, Fresh run, or explicit disconnect.
+        let mut snapshot_error = None;
         let snapshot = if !listing
             && !matches!(response, Err(WorkerError::Transport(_)))
             && let Some(worker) = session.as_mut()
@@ -200,12 +197,27 @@ fn dispatch(state: Store<GlobalState>, request: WorkerRequest, create_and_use: b
                     worker.opened = snapshot.connection.clone();
                     Some(snapshot)
                 }
-                _ => None,
+                response => {
+                    worker.opened = None;
+                    snapshot_error = Some(match response {
+                        Ok(WorkerResponse::ListFiles(Err(error))) | Err(error) => error,
+                        _ => WorkerError::Unexpected,
+                    });
+                    None
+                }
             }
         } else {
             None
         };
-        if matches!(response, Err(WorkerError::Transport(_))) {
+        if listing && let Some(worker) = session.as_mut() {
+            worker.opened = match &response {
+                Ok(WorkerResponse::ListFiles(Ok(snapshot))) => snapshot.connection.clone(),
+                _ => None,
+            };
+        }
+        if matches!(response, Err(WorkerError::Transport(_)))
+            || matches!(snapshot_error, Some(WorkerError::Transport(_)))
+        {
             *session = None;
         }
         if state.workspace_id().get_untracked() == workspace
@@ -230,11 +242,16 @@ fn dispatch(state: Store<GlobalState>, request: WorkerRequest, create_and_use: b
                 });
                 state.read_untracked().save();
             }
+            if snapshot_error.is_some()
+                || listing && !matches!(response, Ok(WorkerResponse::ListFiles(Ok(_))))
+            {
+                batch(move || {
+                    state.files().set(None);
+                    state.databases().set(Vec::new());
+                });
+            }
             match response {
                 Ok(response) => {
-                    if create_and_use && let WorkerResponse::CreateDb(Ok(filename)) = &response {
-                        use_database(state, filename.clone());
-                    }
                     handle_response(state, response, embed_sql.as_deref()).await;
                 }
                 Err(error) => {
@@ -249,6 +266,13 @@ fn dispatch(state: Store<GlobalState>, request: WorkerRequest, create_and_use: b
                         .last_error()
                         .set(Some(SQLightError::new_worker(error)));
                 }
+            }
+            if let Some(error) = snapshot_error
+                && state.last_error().with_untracked(|error| error.is_none())
+            {
+                state
+                    .last_error()
+                    .set(Some(SQLightError::new_worker(error)));
             }
         }
         batch(move || {

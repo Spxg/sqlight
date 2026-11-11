@@ -38,6 +38,9 @@ const OPFS_VFS_DIR: &str = if cfg!(feature = "sqlite3mc") {
     "sqlight-sahpool"
 };
 
+const MAX_DATABASE_FILENAME_BYTES: usize = 499;
+const MAX_FILE_FILENAME_BYTES: usize = 511;
+
 fn uri(filename: &str) -> String {
     let filename = String::from(js_sys::encode_uri_component(filename));
     format!("file:{filename}?vfs={OPFS_VFS}")
@@ -66,7 +69,8 @@ impl SQLiteWorker {
     }
 
     async fn open(&mut self, options: OpenOptions) -> Result<()> {
-        validate_filename(&options.filename).map_err(WorkerError::LoadDb)?;
+        validate_filename(&options.filename, MAX_DATABASE_FILENAME_BYTES)
+            .map_err(WorkerError::LoadDb)?;
         if self.options.as_ref().is_some_and(|current| {
             current.filename == options.filename && current.read_only == options.read_only
         }) && self.db.is_some()
@@ -245,7 +249,10 @@ impl SQLiteWorker {
         let mut databases = Vec::new();
         let mut files = Vec::new();
         for file in options.files {
-            validate_filename(&file.filename).map_err(WorkerError::LoadDb)?;
+            // The transfer API applies the main-database name limit to every
+            // imported file, including journals and WAL files.
+            validate_filename(&file.filename, MAX_DATABASE_FILENAME_BYTES)
+                .map_err(WorkerError::LoadDb)?;
             if !names.insert(file.filename.clone()) {
                 return Err(WorkerError::LoadDb(format!(
                     "Duplicate database name: {}",
@@ -323,7 +330,7 @@ impl SQLiteWorker {
 
     async fn create_db(&mut self, filename: String) -> Result<String> {
         self.ensure_fs().await?;
-        validate_filename(&filename).map_err(WorkerError::CreateDb)?;
+        validate_filename(&filename, MAX_DATABASE_FILENAME_BYTES).map_err(WorkerError::CreateDb)?;
         if is_sidecar(&filename) {
             return Err(WorkerError::CreateDb(
                 "Choose a main database filename, without journal or WAL suffixes".into(),
@@ -355,7 +362,7 @@ impl SQLiteWorker {
     }
 
     async fn create_scratch(&mut self, filename: String) -> Result<String> {
-        validate_filename(&filename).map_err(WorkerError::CreateDb)?;
+        validate_filename(&filename, MAX_DATABASE_FILENAME_BYTES).map_err(WorkerError::CreateDb)?;
         if is_sidecar(&filename) {
             return Err(WorkerError::CreateDb(
                 "Choose a main database filename".into(),
@@ -429,7 +436,8 @@ impl SQLiteWorker {
         self.ensure_autocommit()?;
         let mut selected = HashSet::new();
         for filename in filenames {
-            validate_filename(&filename).map_err(WorkerError::Filesystem)?;
+            validate_filename(&filename, MAX_FILE_FILENAME_BYTES)
+                .map_err(WorkerError::Filesystem)?;
             if !self.contains(&filename)? {
                 return Err(WorkerError::MissingDatabase(filename));
             }
@@ -490,37 +498,18 @@ impl SQLiteWorker {
     }
 
     async fn download_db(&mut self) -> Result<DownloadDbResponse> {
-        self.ensure_fs().await?;
-        if let Some(db) = &self.db
-            && !db.is_autocommit()
-        {
-            return Err(WorkerError::DownloadDb(
-                "Commit or roll back the current transaction before downloading".into(),
-            ));
-        }
-        if self
+        let filename = self
             .options
             .as_ref()
-            .is_some_and(|options| options.read_only)
-        {
-            let filename = &self.options.as_ref().unwrap().filename;
-            return self.download_raw(filename);
-        }
-        // VFS transfers require a closed database.
-        self.db = None;
-        let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
-        let filename = options.filename.clone();
-        let data = export_db(self.opfs.as_ref().unwrap(), &filename);
-        self.reopen()?;
-        Ok(DownloadDbResponse {
-            filename,
-            data: Uint8Array::new_from_slice(&data?),
-        })
+            .ok_or(WorkerError::NotOpened)?
+            .filename
+            .clone();
+        self.download_file(&filename).await
     }
 
     async fn download_file(&mut self, filename: &str) -> Result<DownloadDbResponse> {
         self.ensure_fs().await?;
-        validate_filename(filename).map_err(WorkerError::DownloadDb)?;
+        validate_filename(filename, MAX_FILE_FILENAME_BYTES).map_err(WorkerError::DownloadDb)?;
         if !self.contains(filename)? {
             return Err(WorkerError::MissingDatabase(filename.into()));
         }
@@ -581,7 +570,8 @@ impl SQLiteWorker {
         let mut selected = HashSet::new();
         let mut names = Vec::new();
         for database in &databases {
-            validate_filename(database).map_err(WorkerError::DownloadDb)?;
+            validate_filename(database, MAX_FILE_FILENAME_BYTES)
+                .map_err(WorkerError::DownloadDb)?;
             if !self.contains(database)? {
                 return Err(WorkerError::MissingDatabase(database.clone()));
             }
@@ -642,33 +632,6 @@ impl SQLiteWorker {
     }
 }
 
-fn export_db(vfs: &OpfsSAHPoolUtil, filename: &str) -> Result<Vec<u8>> {
-    fn error(error: impl std::fmt::Display) -> WorkerError {
-        WorkerError::DownloadDb(error.to_string())
-    }
-
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let sidecar = format!("{filename}{suffix}");
-        if !vfs.contains(&sidecar).map_err(error)? {
-            continue;
-        }
-        let mut source = vfs.begin_export(&sidecar).map_err(error)?;
-        let mut first = [0];
-        let length = source.read(&mut first).map_err(error)?;
-        drop(source);
-        // SQLite treats a zero journal header as cold. Preserve WAL data and
-        // potentially hot journals instead of exporting an incomplete database.
-        if length == 0 || (suffix == "-journal" && first[0] == 0) {
-            vfs.remove(&sidecar).map_err(error)?;
-        } else if suffix != "-shm" {
-            return Err(WorkerError::DownloadDb(format!(
-                "Database has a journal or WAL that needs recovery: {filename}"
-            )));
-        }
-    }
-    vfs.export_db(filename).map_err(error)
-}
-
 fn validate_import_db(
     db: &[u8],
 ) -> std::result::Result<(), sqlite_wasm_rs::vfs::transfer::ImportDbError> {
@@ -703,10 +666,13 @@ fn validate_import_db(
     Ok(())
 }
 
-fn validate_filename(filename: &str) -> std::result::Result<(), String> {
+fn validate_filename(filename: &str, max_bytes: usize) -> std::result::Result<(), String> {
     if filename.is_empty() || matches!(filename, "." | "..") || filename.contains(['\0', '/', '\\'])
     {
         return Err("Choose a nonempty database filename without directory separators".into());
+    }
+    if filename.len() > max_bytes {
+        return Err(format!("Filename exceeds {max_bytes} UTF-8 bytes"));
     }
     Ok(())
 }
