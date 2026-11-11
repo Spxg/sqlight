@@ -10,6 +10,8 @@ import { checkExecutionProgress } from './loading-checks.mjs';
 import { checkInteractions } from './interaction-checks.mjs';
 import { checkBatchFailures, checkResultPaging } from './result-checks.mjs';
 import { checkSharing } from './share-checks.mjs';
+import { checkWorkspaces } from './workspace-checks.mjs';
+import { checkWorkspaceMenuPosition } from './menu-checks.mjs';
 
 const dist = process.argv[2]
   ? path.resolve(process.argv[2])
@@ -84,6 +86,9 @@ try {
   );
   await page.getByRole('button', { name: 'Run', exact: true }).click();
   await page.getByText('Finished', { exact: true }).waitFor();
+  await page.waitForFunction(() =>
+    JSON.parse(localStorage.getItem('config'))?.database === 'default.db',
+  );
   const exampleTables = page.getByRole('table');
   assert.equal(await exampleTables.count(), 2);
   assert.equal(await exampleTables.first().locator('tbody tr').count(), 4);
@@ -217,12 +222,25 @@ try {
   const download = await downloadPromise;
   const database = await readFile(await download.path());
   assert.equal(database.subarray(0, 16).toString(), 'SQLite format 3\0');
+  await page.waitForFunction(() =>
+    JSON.parse(localStorage.getItem('config'))?.sql.includes('CREATE TABLE imported'),
+  );
+  const beforeImport = await page.evaluate(() => JSON.parse(localStorage.getItem('config')));
+  assert.equal(beforeImport.database, 'default.db');
   await page.locator('input[type=file]').setInputFiles({
     name: 'import.db',
     mimeType: 'application/vnd.sqlite3',
     buffer: database,
   });
   await page.getByText('Database imported.', { exact: true }).waitFor();
+  const afterImport = await page.evaluate(() => JSON.parse(localStorage.getItem('config')));
+  for (const field of ['workspace_id', 'database', 'engine', 'keep_ctx', 'read_only']) {
+    assert.equal(afterImport[field], beforeImport[field], `Import preserves ${field}`);
+  }
+  await page.getByRole('button', { name: /^Workspace: / }).click();
+  await page.getByRole('combobox', { name: 'Main database', exact: true })
+    .selectOption('import.db');
+  await closeMenu();
   await run('SELECT * FROM imported;');
   await page.getByRole('cell', { name: "'roundtrip'", exact: true }).waitFor();
   await page.locator('input[type=file]').setInputFiles({
@@ -234,39 +252,39 @@ try {
   await run('SELECT * FROM imported;');
   await page.getByRole('cell', { name: "'roundtrip'", exact: true }).waitFor();
 
-  // An OPFS lock failure must not leave the cached Memory connection unusable.
-  await page.evaluate(async () => {
-    const worker = new Worker('./sqlite3_loader.js', { type: 'module' });
-    globalThis.blockingWorker = worker;
-    await new Promise((resolve) => {
-      worker.onmessage = resolve;
-    });
-    const opened = new Promise((resolve) => {
-      worker.onmessage = (event) => resolve(event.data);
-    });
-    worker.postMessage({ Open: { filename: 'locked.db', persist: true } });
-    const response = await opened;
-    if (!Object.hasOwn(response.Open, 'Ok'))
-      throw new Error(JSON.stringify(response));
+  // Another tab can retry after the current tab releases the OPFS locks.
+  await page.waitForFunction(() => {
+    const config = JSON.parse(localStorage.getItem('config'));
+    return config?.database === 'import.db' && config.keep_ctx === true;
   });
-  await page.getByRole('button', { name: 'Memory', exact: true }).click();
-  await page.getByRole('button', { name: /^OPFS Persistent/ }).click();
-  await closeMenu();
-  await edit('SELECT 1;');
-  await page.getByRole('button', { name: 'Run', exact: true }).click();
-  await page.getByText('OPFS already opened', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'OPFS', exact: true }).click();
-  await page.getByRole('button', { name: /^Memory Data/ }).click();
-  await closeMenu();
+  const blockedPage = await context.newPage();
+  try {
+    await blockedPage.goto(origin);
+    await blockedPage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
+    await blockedPage.evaluate(() => ace.edit('ace_editor').setValue('SELECT 1;', -1));
+    await blockedPage.getByRole('button', { name: 'Run', exact: true }).click();
+    await blockedPage.getByText('OPFS already opened', { exact: true }).waitFor();
+    await blockedPage.getByText(/Close that tab and try again/).waitFor();
+    await page.reload();
+    await page.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
+    await blockedPage.evaluate(() =>
+      ace.edit('ace_editor').setValue('SELECT * FROM imported;', -1),
+    );
+    await blockedPage.getByRole('button', { name: 'Run', exact: true }).click();
+    await blockedPage.getByRole('cell', { name: "'roundtrip'", exact: true }).waitFor();
+  } finally {
+    await blockedPage.close();
+  }
   await run('SELECT * FROM imported;');
   await page.getByRole('cell', { name: "'roundtrip'", exact: true }).waitFor();
-  await page.evaluate(() => globalThis.blockingWorker.terminate());
 
   await checkEditor(page);
   await checkResultPaging(page);
   await checkBatchFailures(page);
   await checkInteractions(page);
   await checkSharing(page);
+  await checkWorkspaceMenuPosition(page);
+  await checkWorkspaces(page);
 
   await checkEngineSelection(page);
   await checkWorkers(page);
@@ -276,7 +294,7 @@ try {
     'The app should load and run without browser errors',
   );
   console.log(
-    'Browser checks passed: editor, execution, result paging, partial failures, preferences, sharing, transfers, all three engines, encryption, and OPFS.',
+    'Browser checks passed: editor, execution, result paging, partial failures, preferences, sharing, workspaces, read-only queries, transfers, all three engines, encryption, and OPFS.',
   );
 } catch (error) {
   await mkdir('test-results', { recursive: true });

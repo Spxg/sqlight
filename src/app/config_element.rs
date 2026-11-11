@@ -10,55 +10,11 @@ istyles!(
 );
 
 #[component]
-pub fn Toggle<E, V>(
-    #[prop(default = None)] aside: Option<AnyView>,
-    on_change: E,
-    id: &'static str,
-    value: V,
-    name: String,
-) -> impl IntoView
-where
-    E: Fn(bool) + Send + Sync + 'static,
-    V: Fn() -> bool + Send + Sync + 'static,
-{
-    let value = Signal::derive(value);
-    let on_change = Callback::new(on_change);
-    let on_id = format!("{id}-on");
-    let off_id = format!("{id}-off");
-
-    view! {
-        <ConfigElement
-            name=name
-            is_default=Box::new(move || !value.get())
-            aside=aside
-        >
-            <div class=styles::toggle>
-                <input
-                    id=on_id.clone()
-                    name=id
-                    type="radio"
-                    prop:checked=move || value.get()
-                    on:change=move |_| on_change.run(true)
-                />
-                <label for=on_id>"On"</label>
-                <input
-                    id=off_id.clone()
-                    name=id
-                    type="radio"
-                    prop:checked=move || !value.get()
-                    on:change=move |_| on_change.run(false)
-                />
-                <label for=off_id>"Off"</label>
-            </div>
-        </ConfigElement>
-    }
-}
-
-#[component]
 pub fn Select<E, V>(
     on_change: E,
     value: V,
     name: String,
+    #[prop(optional, into)] disabled: Signal<bool>,
     #[prop(default = Box::new(|| true))] is_default: Box<dyn Fn() -> bool + Send>,
     children: Children,
 ) -> impl IntoView
@@ -69,7 +25,13 @@ where
     let label = name.clone();
     view! {
         <ConfigElement name=name is_default=is_default>
-            <select class=styles::select aria-label=label prop:value=value on:change=on_change>
+            <select
+                class=styles::select
+                aria-label=label
+                prop:value=value
+                disabled=move || disabled.get()
+                on:change=on_change
+            >
                 {children()}
             </select>
         </ConfigElement>

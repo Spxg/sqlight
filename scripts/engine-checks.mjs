@@ -8,7 +8,7 @@ export async function checkEngineSelection(page) {
 
   async function selectEngine(value, savedValue) {
     await page
-      .getByRole('button', { name: 'Advanced options', exact: true })
+      .getByRole('button', { name: /^Workspace: / })
       .click();
     await engineSelect.selectOption(value);
     assert.equal(await engineSelect.inputValue(), value);
@@ -41,7 +41,7 @@ export async function checkEngineSelection(page) {
   });
   await page.reload();
   await page
-    .getByRole('button', { name: 'Advanced options', exact: true })
+    .getByRole('button', { name: /^Workspace: / })
     .click();
   assert.equal(await engineSelect.inputValue(), 'SQLite3 Multiple Ciphers');
   await page.keyboard.press('Escape');
@@ -57,7 +57,7 @@ export async function checkEngineSelection(page) {
   await page.reload();
   await page.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
   await page
-    .getByRole('button', { name: 'Advanced options', exact: true })
+    .getByRole('button', { name: /^Workspace: / })
     .click();
   assert.equal(await engineSelect.inputValue(), 'SQLCipher');
   await page.keyboard.press('Escape');
@@ -92,6 +92,25 @@ export async function checkEngineSelection(page) {
 }
 
 export async function checkWorkers(page) {
+  const context = await page.context().browser().newContext();
+  const origin = new URL(page.url());
+  origin.search = '';
+  origin.hash = '';
+  await context.route('**/*', (route) =>
+    route.request().url().startsWith(origin.origin)
+      ? route.continue()
+      : route.abort(),
+  );
+  try {
+    const workerPage = await context.newPage();
+    await workerPage.goto(origin.href);
+    await checkWorkerContext(workerPage);
+  } finally {
+    await context.close();
+  }
+}
+
+async function checkWorkerContext(page) {
   const checked = await page.evaluate(async () => {
     async function startWorker(engine) {
       const worker = new Worker(`./${engine}_loader.js`, { type: 'module' });
@@ -175,10 +194,178 @@ export async function checkWorkers(page) {
           throw new Error(`${engine}: Encrypted database has a plaintext header`);
         }
       };
+      const sqliteErrorCode = (response) => {
+        const error = response.Run.Ok?.error ?? response.Run.Err?.SQLite;
+        return error && Object.values(error)[0].code;
+      };
+
+      async function checkReadOnly() {
+        const database = { filename: `readonly-${engine}.db` };
+        const open = async (read_only) => unwrap(
+          await request({ Open: { ...database, read_only } }),
+        );
+        const key = engine === 'sqlite3' ? '' : "PRAGMA key='readonly-key'; ";
+        await open(false);
+        await sql(key + `PRAGMA journal_mode=PERSIST;
+          CREATE TABLE protected(value);
+          INSERT INTO protected VALUES (321);`);
+        await open(true);
+        await sql(key + 'SELECT value FROM protected;');
+        unwrap(await request({
+          Open: { ...database, read_only: true, workspace: 'readonly-other' },
+        }));
+        if (value(await sql('SELECT value FROM protected;'), 'value') !== '321')
+          throw new Error(`${engine}: Workspace selection reset the shared cipher connection`);
+
+        for (const statement of [
+          'INSERT INTO protected VALUES (999);',
+          'CREATE TABLE forbidden(value);',
+          'PRAGMA query_only=OFF; UPDATE protected SET value=999;',
+        ]) {
+          const failed = await request(run(statement));
+          if ((sqliteErrorCode(failed) & 0xff) !== 8)
+            throw new Error(`${engine}: Read-only execution allowed ${statement}`);
+        }
+
+        await sql('PRAGMA query_only=ON; PRAGMA cache_size=-321;');
+        const downloaded = unwrap(await request({ DownloadFile: database.filename }));
+        if (engine !== 'sqlite3') encryptedHeader(downloaded.data);
+        const preserved = await sql(`PRAGMA query_only;
+          PRAGMA cache_size; SELECT value FROM protected;`);
+        if (value(preserved, 'query_only') !== '1'
+          || value(preserved, 'cache_size') !== '-321'
+          || value(preserved, 'value') !== '321') {
+          throw new Error(`${engine}: Read-only export reset the connection`);
+        }
+        const repeated = unwrap(await request({ DownloadFile: database.filename }));
+        if (downloaded.data.length !== repeated.data.length
+          || downloaded.data.some((byte, index) => byte !== repeated.data[index])) {
+          throw new Error(`${engine}: Read-only export changed database bytes`);
+        }
+
+        // The retained PERSIST journal is cold but must remain untouched.
+        unwrap(await request({
+          Open: { ...database, filename: `${database.filename}-journal`, read_only: true },
+        }));
+        const journal = unwrap(await request('DownloadDb')).data;
+        if (!journal.length || journal[0] !== 0)
+          throw new Error(`${engine}: Read-only export removed the journal`);
+
+        await open(true);
+        const companion = `${database.filename}-shared.db`;
+        unwrap(await request({
+          LoadDbs: { files: [{ filename: companion, data: downloaded.data }], replace: false },
+        }));
+        await sql(key + 'BEGIN; SELECT value FROM protected;');
+        const reset = unwrap(await request({
+          Run: {
+            sql: `SELECT count(*) AS remaining FROM sqlite_schema;
+              PRAGMA compile_options; SELECT sqlite_version() AS version;`,
+            embed: false,
+            clear_on_prepare: true,
+          },
+        }));
+        if (reset.error || value(reset, 'remaining') !== '0'
+          || !table(reset, 'compile_options').rows.length
+          || !/^'\d+\./.test(value(reset, 'version'))) {
+          throw new Error(`${engine}: Fresh read-only mode did not provide an empty readable database`);
+        }
+        if ((sqliteErrorCode(await request(run('PRAGMA query_only=OFF; CREATE TABLE forbidden(value);')))
+          & 0xff) !== 8) {
+          throw new Error(`${engine}: Fresh read-only mode allowed writing`);
+        }
+        const retainedCompanion = unwrap(await request({ DownloadFile: companion })).data;
+        if (retainedCompanion.length !== downloaded.data.length
+          || retainedCompanion.some((byte, index) => byte !== downloaded.data[index])) {
+          throw new Error(`${engine}: Fresh read-only mode changed another shared database`);
+        }
+
+        unwrap(await request({ LoadDb: { data: downloaded.data } }));
+        if (value(await sql(key + 'SELECT value FROM protected;'), 'value') !== '321')
+          throw new Error(`${engine}: Read-only database import changed rows`);
+        if ((sqliteErrorCode(await request(run('INSERT INTO protected VALUES (999);')))
+          & 0xff) !== 8) {
+          throw new Error(`${engine}: Import reopened a read-only database for writing`);
+        }
+
+        await open(false);
+        const writable = await sql(key + `INSERT INTO protected VALUES (456);
+          SELECT count(*) AS count FROM protected;`);
+        if (value(writable, 'count') !== '2')
+          throw new Error(`${engine}: Switching back to read-write failed`);
+        await sql('PRAGMA query_only=ON; PRAGMA cache_size=-654;');
+        const writableDownload = unwrap(await request({ DownloadFile: database.filename }));
+        if (engine !== 'sqlite3') encryptedHeader(writableDownload.data);
+        const writablePreserved = await sql(`PRAGMA query_only;
+          PRAGMA cache_size; SELECT count(*) AS count FROM protected;`);
+        if (value(writablePreserved, 'query_only') !== '1'
+          || value(writablePreserved, 'cache_size') !== '-654'
+          || value(writablePreserved, 'count') !== '2') {
+          throw new Error(`${engine}: Writable file download reset the connection or key`);
+        }
+
+        unwrap(await request({
+          Open: { filename: 'empty-readonly.db', read_only: true },
+        }));
+        const empty = await sql('PRAGMA integrity_check;');
+        if (value(empty, 'integrity_check') !== "'ok'")
+          throw new Error(`${engine}: Read-only workspace initialized an invalid database`);
+        const initialized = unwrap(await request('DownloadDb')).data;
+        if (new TextDecoder().decode(initialized.slice(0, 16)) !== 'SQLite format 3\0')
+          throw new Error(`${engine}: Empty read-only workspace was not initialized`);
+      }
+
+      async function checkDownloadWal() {
+        const main = 'download-main.db';
+        const target = 'download-wal.db';
+        const key = engine === 'sqlite3' ? '' : "PRAGMA key='download-key'; ";
+        const attachKey = engine === 'sqlite3' ? '' : "KEY 'download-key'";
+        unwrap(await request({ Open: { filename: main } }));
+        await sql(key + `CREATE TABLE connection_marker(value);
+          INSERT INTO connection_marker VALUES (123);
+          ATTACH '${target}' AS "wal""target" ${attachKey};
+          PRAGMA "wal""target".locking_mode=EXCLUSIVE;
+          PRAGMA "wal""target".journal_mode=WAL;
+          CREATE TABLE "wal""target".downloaded(value);
+          INSERT INTO "wal""target".downloaded VALUES (456);
+          PRAGMA query_only=ON; PRAGMA cache_size=-444;`);
+        const before = unwrap(await request({ DownloadFile: `${target}-wal` }));
+        if (!before.data.length)
+          throw new Error(`${engine}: WAL download regression did not create a WAL`);
+        const downloaded = unwrap(await request({ DownloadFile: target }));
+        if (downloaded.filename !== target)
+          throw new Error(`${engine}: WAL download changed the selected filename`);
+        if (engine !== 'sqlite3') encryptedHeader(downloaded.data);
+        const after = unwrap(await request({ DownloadFile: `${target}-wal` }));
+        if (after.data.length)
+          throw new Error(`${engine}: WAL download did not checkpoint the selected database`);
+        const preserved = await sql(`PRAGMA query_only; PRAGMA cache_size;
+          SELECT value AS marker FROM connection_marker;
+          SELECT value FROM "wal""target".downloaded;`);
+        if (value(preserved, 'query_only') !== '1'
+          || value(preserved, 'cache_size') !== '-444'
+          || value(preserved, 'marker') !== '123'
+          || value(preserved, 'value') !== '456') {
+          throw new Error(`${engine}: WAL download changed the current connection or ATTACH`);
+        }
+        unwrap(await request('Close'));
+        const peer = await startWorker(engine);
+        try {
+          unwrap(await peer.request({ Open: { filename: 'download-restored.db' } }));
+          unwrap(await peer.request({ LoadDb: { data: downloaded.data } }));
+          const restored = unwrap(await peer.request(run(key + `PRAGMA locking_mode=EXCLUSIVE;
+            SELECT value FROM downloaded;`)));
+          if (restored.error || value(restored, 'value') !== '456')
+            throw new Error(`${engine}: WAL download did not include committed data`);
+          unwrap(await peer.request('Close'));
+        } finally {
+          peer.terminate();
+        }
+      }
 
       try {
         unwrap(
-          await request({ Open: { filename: 'smoke.db', persist: false } }),
+          await request({ Open: { filename: 'smoke.db' } }),
         );
         if (engine === 'sqlcipher') {
           const version = await sql('PRAGMA cipher_version;');
@@ -205,12 +392,27 @@ export async function checkWorkers(page) {
         const transaction = await request('DownloadDb');
         if (!transaction.DownloadDb.Err)
           throw new Error(`${engine}: Export accepted an uncommitted transaction`);
+        for (const options of [
+          { filename: 'smoke.db', read_only: true },
+          { filename: 'other.db' },
+        ]) {
+          const switched = await request({ Open: options });
+          if (switched.Open.Err !== 'ActiveTransaction')
+            throw new Error(`${engine}: Database switch discarded an open transaction`);
+          if (value(await sql('SELECT count(*) AS count FROM persistent;'), 'count') !== '2')
+            throw new Error(`${engine}: Failed switch changed the current transaction`);
+        }
         await sql('ROLLBACK;');
         const exported = unwrap(await request('DownloadDb'));
         unwrap(await request({ LoadDb: { data: exported.data } }));
         const imported = await sql('SELECT * FROM persistent;');
         if (value(imported, 'value') !== '7')
           throw new Error(`${engine}: Database transfer changed rows`);
+        await sql('BEGIN; INSERT INTO persistent VALUES (9);');
+        const importTransaction = await request({ LoadDb: { data: exported.data } });
+        if (importTransaction.LoadDb.Err !== 'ActiveTransaction')
+          throw new Error(`${engine}: Import discarded an open transaction`);
+        await sql('ROLLBACK;');
 
         for (const size of [6, 513]) {
           const invalid = await request({
@@ -225,7 +427,7 @@ export async function checkWorkers(page) {
         if (engine !== 'sqlite3') {
           unwrap(
             await request({
-              Open: { filename: 'encrypted.db', persist: false },
+              Open: { filename: 'encrypted.db' },
             }),
           );
           await sql(
@@ -258,7 +460,7 @@ export async function checkWorkers(page) {
 
         unwrap(
           await request({
-            Open: { filename: `smoke-${engine}.db`, persist: true },
+            Open: { filename: `smoke-${engine}.db` },
           }),
         );
         const key = engine === 'sqlcipher' ? "PRAGMA key='opfs-key'; " : '';
@@ -268,12 +470,10 @@ export async function checkWorkers(page) {
             DELETE FROM persisted;
             INSERT INTO persisted VALUES (123);`,
         );
-        unwrap(
-          await request({ Open: { filename: 'memory.db', persist: false } }),
-        );
+        unwrap(await request('Close'));
         unwrap(
           await request({
-            Open: { filename: `smoke-${engine}.db`, persist: true },
+            Open: { filename: `smoke-${engine}.db` },
           }),
         );
         const persistent = await sql(
@@ -337,15 +537,11 @@ export async function checkWorkers(page) {
           unwrap(await request({ LoadDb: { data: baseline.data } }));
         }
 
-        unwrap(await request({
-          Open: { filename: 'handoff-memory.db', persist: false },
-        }));
-        await sql(`CREATE TABLE cached(value);
-          INSERT INTO cached VALUES (321);`);
+        unwrap(await request('Close'));
         const peer = await startWorker(engine);
         try {
           const persistent = {
-            Open: { filename: `smoke-${engine}.db`, persist: true },
+            Open: { filename: `smoke-${engine}.db` },
           };
           unwrap(await peer.request(persistent));
           const shared = unwrap(
@@ -357,15 +553,7 @@ export async function checkWorkers(page) {
           const blocked = await request(persistent);
           if (blocked.Open.Err !== 'OpfsSAHPoolOpened')
             throw new Error(`${engine}: OPFS allowed two workers to hold locks`);
-          unwrap(await request({
-            Open: { filename: 'handoff-memory.db', persist: false },
-          }));
-          if (value(await sql('SELECT value FROM cached;'), 'value') !== '321')
-            throw new Error(`${engine}: Failed OPFS resume lost the Memory database`);
-
-          unwrap(await peer.request({
-            Open: { filename: 'peer-memory.db', persist: false },
-          }));
+          unwrap(await peer.request('Close'));
           unwrap(await request(persistent));
           const resumed = await sql(key + 'SELECT value FROM persisted;');
           if (value(resumed, 'value') !== '123')
@@ -383,18 +571,156 @@ export async function checkWorkers(page) {
         if (!unsafeExport.DownloadDb.Err)
           throw new Error(`${engine}: Export discarded a nonempty WAL`);
         unwrap(await request({
-          Open: { filename: `smoke-${engine}.db-wal`, persist: true },
+          Open: { filename: `smoke-${engine}.db`, read_only: true },
+        }));
+        const unsafeReadOnlyExport = await request('DownloadDb');
+        if (!unsafeReadOnlyExport.DownloadDb.Err)
+          throw new Error(`${engine}: Read-only export ignored a nonempty WAL`);
+        const unsafeReadOnlyFile = await request({ DownloadFile: `smoke-${engine}.db` });
+        if (!unsafeReadOnlyFile.DownloadDb.Err)
+          throw new Error(`${engine}: Read-only file download ignored a nonempty WAL`);
+        unwrap(await request({
+          Open: { filename: `smoke-${engine}.db-wal` },
         }));
         const retained = await sql(key + 'SELECT value FROM marker;');
         if (value(retained, 'value') !== '999')
           throw new Error(`${engine}: Failed export changed WAL contents`);
         unwrap(await request({
-          Open: { filename: `smoke-${engine}.db`, persist: true },
+          Open: { filename: `smoke-${engine}.db` },
         }));
         unwrap(await request({
           Run: { sql: key + 'SELECT 1;', embed: false, clear_on_prepare: true },
         }));
         unwrap(await request({ LoadDb: { data: baseline.data } }));
+        await checkReadOnly();
+        unwrap(await request('Close'));
+
+        {
+          const prefix = 'shared';
+          const source = { filename: `${prefix}-source.db`, workspace: `${prefix}-source` };
+          const aName = `${prefix}-a.db`;
+          const bName = `${prefix}-b.db`;
+          unwrap(await request({ Open: source }));
+          await sql(`CREATE TABLE shared_data(value);
+            INSERT INTO shared_data VALUES (1);`);
+          const first = unwrap(await request('DownloadDb')).data;
+          await sql('UPDATE shared_data SET value=2;');
+          const second = unwrap(await request('DownloadDb')).data;
+
+          await sql(`CREATE TEMP TABLE download_marker(value);
+            INSERT INTO download_marker VALUES (123);
+            PRAGMA query_only=ON; PRAGMA cache_size=-777;`);
+          const loaded = unwrap(await request({
+            LoadDbs: {
+              files: [{ filename: aName, data: first }, { filename: bName, data: second }],
+              replace: false,
+            },
+          }));
+          if (JSON.stringify(loaded) !== JSON.stringify([aName, bName]))
+            throw new Error(`${engine}: Batch upload did not preserve database names`);
+          const downloadedB = unwrap(await request({ DownloadFile: bName }));
+          if (downloadedB.filename !== bName || downloadedB.data.length !== second.length
+            || downloadedB.data.some((byte, index) => byte !== second[index])) {
+            throw new Error(`${engine}: Downloading another file changed its name or bytes`);
+          }
+          const retained = await sql(`PRAGMA cache_size; PRAGMA query_only;
+            PRAGMA database_list; SELECT value AS marker FROM download_marker;`);
+          if (value(retained, 'cache_size') !== '-777' || value(retained, 'query_only') !== '1'
+            || value(retained, 'marker') !== '123'
+            || !table(retained, 'file').rows.some((row) => row.includes(`'${source.filename}'`))) {
+            throw new Error(`${engine}: Upload or download reset or changed the current connection`);
+          }
+          await sql('PRAGMA query_only=OFF;');
+
+          for (const files of [
+            [{ filename: aName, data: first }],
+            [{ filename: 'duplicate.db', data: first }, { filename: 'duplicate.db', data: second }],
+            [{ filename: 'not-written.db', data: first }, { filename: 'invalid.db', data: new Uint8Array(6) }],
+            [{ filename: 'bad/name.db', data: first }],
+          ]) {
+            const failed = await request({ LoadDbs: { files, replace: false } });
+            if (!failed.LoadDbs.Err)
+              throw new Error(`${engine}: Batch upload accepted invalid or conflicting files`);
+          }
+          const names = unwrap(await request('ListDbs'));
+          if (!names.includes(aName) || !names.includes(bName)
+            || names.includes('duplicate.db') || names.includes('not-written.db')) {
+            throw new Error(`${engine}: Batch validation left a partial import`);
+          }
+
+          const specialName = `${prefix} sp ace?#%你好.db`;
+          unwrap(await request({
+            LoadDbs: { files: [{ filename: specialName, data: first }], replace: false },
+          }));
+          unwrap(await request({
+            Open: { filename: specialName, workspace: `${prefix}-special` },
+          }));
+          if (value(await sql('SELECT value FROM shared_data;'), 'value') !== '1')
+            throw new Error(`${engine}: SQLite URI changed the uploaded filename`);
+
+          const joined = { filename: `${prefix}-join.db`, workspace: `${prefix}-first` };
+          unwrap(await request({ Open: joined }));
+          const joinedResult = await sql(`ATTACH '${aName}' AS a;
+            ATTACH '${bName}' AS b;
+            SELECT a.shared_data.value + b.shared_data.value AS total
+            FROM a.shared_data CROSS JOIN b.shared_data;`);
+          if (value(joinedResult, 'total') !== '3')
+            throw new Error(`${engine}: ATTACH could not join the uploaded databases`);
+
+          await sql('BEGIN; INSERT INTO a.shared_data VALUES (9);');
+          const selected = { ...joined, workspace: `${prefix}-second` };
+          unwrap(await request({ Open: selected }));
+          if (value(await sql('SELECT count(*) AS count FROM a.shared_data;'), 'count') !== '2')
+            throw new Error(`${engine}: Workspace selection discarded the shared transaction`);
+          const busyDownload = await request({ DownloadFile: bName });
+          if (!busyDownload.DownloadDb.Err)
+            throw new Error(`${engine}: Download accepted a mounted file during a transaction`);
+          const unrelatedDownload = unwrap(await request({ DownloadFile: specialName }));
+          if (unrelatedDownload.filename !== specialName || unrelatedDownload.data.length !== first.length
+            || unrelatedDownload.data.some((byte, index) => byte !== first[index])) {
+            throw new Error(`${engine}: Downloading an unmounted file changed its bytes`);
+          }
+          if (value(await sql('SELECT count(*) AS count FROM a.shared_data;'), 'count') !== '2')
+            throw new Error(`${engine}: File download discarded the current transaction or ATTACH`);
+          const blocked = await request({ Open: { filename: bName, workspace: 'blocked' } });
+          if (blocked.Open.Err !== 'ActiveTransaction')
+            throw new Error(`${engine}: Changing databases discarded an open transaction`);
+          const busyImport = await request({
+            LoadDbs: { files: [{ filename: 'not-uploaded.db', data: first }], replace: false },
+          });
+          if (busyImport.LoadDbs.Err !== 'ActiveTransaction')
+            throw new Error(`${engine}: Upload accepted an open transaction`);
+          const duringTransaction = unwrap(await request('ListDbs'));
+          if (duringTransaction.some((name) => /-(journal|wal|shm)$/.test(name)))
+            throw new Error(`${engine}: File selection listed database sidecars`);
+          await sql('ROLLBACK;');
+
+          // Replacing an attached file closes the connection before removing it.
+          unwrap(await request({
+            LoadDbs: { files: [{ filename: aName, data: second }], replace: true },
+          }));
+          const replaced = await sql(`ATTACH '${aName}' AS a;
+            SELECT value FROM a.shared_data;`);
+          if (value(replaced, 'value') !== '2')
+            throw new Error(`${engine}: Replacing an attached database used the old file`);
+
+          unwrap(await request({
+            Run: { sql: 'SELECT 1;', embed: false, clear_on_prepare: true },
+          }));
+          const remaining = unwrap(await request('ListDbs'));
+          if (!remaining.includes(aName) || !remaining.includes(bName))
+            throw new Error(`${engine}: Dropping context deleted other databases`);
+          unwrap(await request({ CloseWorkspace: 'inactive-workspace' }));
+          await sql('SELECT 1;');
+          unwrap(await request({ CloseWorkspace: selected.workspace }));
+          unwrap(await request({
+            Open: { filename: aName, workspace: `${prefix}-third`, read_only: true },
+          }));
+          if (value(await sql('SELECT value FROM shared_data;'), 'value') !== '2')
+            throw new Error(`${engine}: Closing a workspace deleted a shared database`);
+          unwrap(await request('Close'));
+        }
+        await checkDownloadWal();
         checked.push(engine);
       } finally {
         worker.terminate();

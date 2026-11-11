@@ -16,3 +16,20 @@
 .right {
   justify-content: flex-end;
 }
+
+.workspaceName {
+  display: inline-block;
+  max-width: 10em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.workspaceMode {
+  display: inline-grid;
+
+  & > span {
+    grid-area: 1 / 1;
+  }
+}

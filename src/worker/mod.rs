@@ -1,20 +1,24 @@
+mod raw_file;
 mod sqlitend;
 
+use std::collections::HashSet;
+
 use crate::{
-    DownloadDbResponse, LoadDbOptions, OpenOptions, RunOptions, SQLiteRunResult, WorkerError,
-    WorkerRequest, WorkerResponse,
+    DatabaseFile, DownloadDbResponse, LoadDbOptions, LoadDbsOptions, OpenOptions, RunOptions,
+    SQLiteRunResult, WorkerError, WorkerRequest, WorkerResponse,
 };
 use js_sys::Uint8Array;
 use sqlite_wasm_rs::{
     WasmOsCallback,
-    vfs::{VfsFilesManager, memvfs::MemVfsUtil, transfer::DbTransfer},
+    vfs::{VfsFilesManager, transfer::DbTransfer},
 };
-use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
+use sqlite_wasm_vfs::sahpool::{OpfsSAHError, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
 use tokio::sync::mpsc;
 use wasm_bindgen::{JsCast, prelude::Closure};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent};
 
+use raw_file::ReadOnlyFile;
 use sqlitend::SQLiteDb;
 
 type Result<T> = std::result::Result<T, WorkerError>;
@@ -32,20 +36,21 @@ const OPFS_VFS_DIR: &str = if cfg!(feature = "sqlite3mc") {
     "sqlight-sahpool"
 };
 
-#[cfg(not(feature = "sqlite3mc"))]
-const MEM_VFS: &str = "memvfs";
-#[cfg(feature = "sqlite3mc")]
-const MEM_VFS: &str = "multipleciphers-memvfs";
-
 fn uri(options: &OpenOptions) -> String {
-    let vfs = if options.persist { OPFS_VFS } else { MEM_VFS };
-    format!("file:{}?vfs={vfs}", options.filename)
+    let filename = String::from(js_sys::encode_uri_component(&options.filename));
+    format!("file:{filename}?vfs={OPFS_VFS}")
+}
+
+fn initialize_empty_db(options: &OpenOptions) -> Result<()> {
+    let db = SQLiteDb::open(&uri(options), false)?;
+    db.prepare("PRAGMA user_version = 0;")?
+        .results(&mut Vec::new())?;
+    Ok(())
 }
 
 struct SQLiteWorker {
     options: Option<OpenOptions>,
     db: Option<SQLiteDb>,
-    memory: MemVfsUtil,
     opfs: Option<OpfsSAHPoolUtil>,
 }
 
@@ -54,16 +59,23 @@ impl SQLiteWorker {
         Self {
             options: None,
             db: None,
-            // This worker serializes all access to the SQLite VFS.
-            memory: unsafe { MemVfsUtil::get().expect("Failed to initialize memory VFS") },
             opfs: None,
         }
     }
 
     async fn open(&mut self, options: OpenOptions) -> Result<()> {
+        validate_filename(&options.filename)?;
+        if self.options.as_ref().is_some_and(|current| {
+            current.filename == options.filename && current.read_only == options.read_only
+        }) && self.db.is_some()
+        {
+            self.options = Some(options);
+            return Ok(());
+        }
+        self.ensure_autocommit()?;
         self.db = None;
         self.options = None;
-        if options.persist && self.opfs.is_none() {
+        if self.opfs.is_none() {
             self.opfs = Some(
                 sqlite_wasm_vfs::sahpool::install::<WasmOsCallback>(
                     &OpfsSAHPoolCfgBuilder::new()
@@ -76,49 +88,122 @@ impl SQLiteWorker {
                 .map_err(|_| WorkerError::OpfsSAHPoolOpened)?,
             );
         }
-        if let Some(opfs) = &self.opfs {
-            if options.persist {
-                opfs.resume()
-                    .await
-                    .map_err(|_| WorkerError::OpfsSAHPoolOpened)?;
-            } else {
-                opfs.pause().map_err(|_| WorkerError::Unexpected)?;
+        self.opfs
+            .as_ref()
+            .unwrap()
+            .resume()
+            .await
+            .map_err(|_| WorkerError::OpfsSAHPoolOpened)?;
+        self.reserve_opfs(3).await?;
+        if options.read_only {
+            let exists = self
+                .opfs
+                .as_ref()
+                .unwrap()
+                .contains(&options.filename)
+                .map_err(|_| WorkerError::Unexpected)?;
+            if !exists {
+                initialize_empty_db(&options)?;
             }
         }
-        self.db = Some(SQLiteDb::open(&uri(&options))?);
+        self.db = Some(SQLiteDb::open(&uri(&options), options.read_only)?);
         self.options = Some(options);
         Ok(())
     }
 
     fn reopen(&mut self) -> Result<()> {
         let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
-        self.db = Some(SQLiteDb::open(&uri(options))?);
+        self.db = Some(SQLiteDb::open(&uri(options), options.read_only)?);
+        Ok(())
+    }
+
+    fn ensure_autocommit(&self) -> Result<()> {
+        if self.db.as_ref().is_some_and(|db| !db.is_autocommit()) {
+            return Err(WorkerError::ActiveTransaction);
+        }
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.db = None;
+        self.options = None;
+        if let Some(opfs) = &self.opfs {
+            opfs.pause().map_err(|_| WorkerError::Unexpected)?;
+        }
+        Ok(())
+    }
+
+    fn close_workspace(&mut self, workspace: &str) -> Result<()> {
+        if self
+            .options
+            .as_ref()
+            .is_some_and(|options| options.workspace == workspace)
+        {
+            self.close()?;
+        }
+        Ok(())
+    }
+
+    fn contains(&self, filename: &str) -> Result<bool> {
+        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        self.opfs
+            .as_ref()
+            .unwrap()
+            .contains(filename)
+            .map_err(|error| WorkerError::LoadDb(error.to_string()))
+    }
+
+    async fn reserve_opfs(&self, additional: usize) -> Result<()> {
+        let opfs = self.opfs.as_ref().unwrap();
+        let count = opfs
+            .len()
+            .map_err(|error| WorkerError::LoadDb(error.to_string()))?;
+        opfs.ensure_capacity(count + additional)
+            .await
+            .map_err(|error| WorkerError::LoadDb(error.to_string()))
+    }
+
+    fn remove_files(&self, filename: &str) -> Result<()> {
+        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        for suffix in ["-journal", "-wal", "-shm", ""] {
+            let name = format!("{filename}{suffix}");
+            self.opfs
+                .as_ref()
+                .unwrap()
+                .remove(&name)
+                .map_err(|error| WorkerError::LoadDb(error.to_string()))?;
+        }
         Ok(())
     }
 
     fn remove_db(&mut self) -> Result<()> {
         // SQLite must finish rollback/checkpoint work before its files are removed.
         self.db = None;
-        let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        let filename = self
+            .options
+            .as_ref()
+            .ok_or(WorkerError::NotOpened)?
+            .filename
+            .clone();
         // PERSIST/TRUNCATE journals can survive closing the connection.
-        for suffix in ["-journal", "-wal", "-shm", ""] {
-            let filename = format!("{}{suffix}", options.filename);
-            if options.persist {
-                self.opfs
-                    .as_ref()
-                    .unwrap()
-                    .remove(&filename)
-                    .map_err(|_| WorkerError::Unexpected)?;
-            } else {
-                self.memory.remove(&filename).unwrap();
-            }
-        }
-        Ok(())
+        self.remove_files(&filename)
     }
 
-    fn run(&mut self, options: RunOptions) -> Result<SQLiteRunResult> {
+    async fn run(&mut self, options: RunOptions) -> Result<SQLiteRunResult> {
+        let limit = self
+            .db
+            .as_ref()
+            .ok_or(WorkerError::InvalidState)?
+            .attachment_limit();
+        // A script can create every attached database, their journals and
+        // a super-journal before control returns to the worker.
+        self.reserve_opfs(2 * limit + 3).await?;
         if options.clear_on_prepare {
             self.remove_db()?;
+            let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+            if options.read_only {
+                initialize_empty_db(options)?;
+            }
             self.reopen()?;
         }
         let db = self.db.as_ref().ok_or(WorkerError::InvalidState)?;
@@ -131,22 +216,100 @@ impl SQLiteWorker {
         })
     }
 
-    fn load_db(&mut self, data: LoadDbOptions) -> Result<()> {
-        let data = data.data.to_vec();
-        validate_import_db(&data).map_err(|err| WorkerError::LoadDb(err.to_string()))?;
+    async fn load_db(&mut self, data: LoadDbOptions) -> Result<()> {
+        let filename = self
+            .options
+            .as_ref()
+            .ok_or(WorkerError::NotOpened)?
+            .filename
+            .clone();
+        self.load_dbs(LoadDbsOptions {
+            files: vec![DatabaseFile {
+                filename,
+                data: data.data,
+            }],
+            replace: true,
+        })
+        .await
+        .map(|_| ())
+    }
 
-        self.remove_db()?;
-        let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
-        let result = if options.persist {
-            import_db(self.opfs.as_ref().unwrap(), &options.filename, &data)
-                .map_err(|err| WorkerError::LoadDb(err.to_string()))
-        } else {
-            import_db(&self.memory, &options.filename, &data)
-                .map_err(|err| WorkerError::LoadDb(err.to_string()))
-        };
-        // Keep the worker usable even if an import fails after validation.
-        self.reopen()?;
+    async fn load_dbs(&mut self, options: LoadDbsOptions) -> Result<Vec<String>> {
+        self.ensure_autocommit()?;
+        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        let mut names = HashSet::new();
+        let mut files = Vec::new();
+        for file in options.files {
+            validate_filename(&file.filename)?;
+            if ["-journal", "-wal", "-shm"]
+                .iter()
+                .any(|suffix| file.filename.ends_with(suffix))
+            {
+                return Err(WorkerError::LoadDb(
+                    "Upload main database files, without journal or WAL suffixes".into(),
+                ));
+            }
+            if !names.insert(file.filename.clone()) {
+                return Err(WorkerError::LoadDb(format!(
+                    "Duplicate database name: {}",
+                    file.filename
+                )));
+            }
+            let data = file.data.to_vec();
+            validate_import_db(&data)
+                .map_err(|error| WorkerError::LoadDb(format!("{}: {error}", file.filename)))?;
+            if !options.replace {
+                for suffix in ["", "-journal", "-wal", "-shm"] {
+                    if self.contains(&format!("{}{suffix}", file.filename))? {
+                        return Err(WorkerError::LoadDb(format!(
+                            "Database already exists: {}",
+                            file.filename
+                        )));
+                    }
+                }
+            }
+            files.push((file.filename, data));
+        }
+        self.reserve_opfs(files.len() + 3).await?;
+        let reconnect = self.db.as_ref().is_some_and(|db| {
+            files
+                .iter()
+                .any(|(filename, _)| db.uses_file(filename, OPFS_VFS))
+        });
+        if reconnect {
+            self.db = None;
+        }
+        let result = (|| {
+            for (filename, data) in &files {
+                if options.replace {
+                    self.remove_files(filename)?;
+                }
+                import_db(self.opfs.as_ref().unwrap(), filename, data)
+                    .map_err(|error| WorkerError::LoadDb(error.to_string()))?;
+            }
+            Ok(files.into_iter().map(|(filename, _)| filename).collect())
+        })();
+        if reconnect {
+            self.reopen()?;
+        }
         result
+    }
+
+    fn list_dbs(&self) -> Result<Vec<String>> {
+        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        let mut names = self
+            .opfs
+            .as_ref()
+            .unwrap()
+            .names()
+            .map_err(|error| WorkerError::LoadDb(error.to_string()))?;
+        names.retain(|name| {
+            !["-journal", "-wal", "-shm"]
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+        });
+        names.sort();
+        Ok(names)
     }
 
     fn download_db(&mut self) -> Result<DownloadDbResponse> {
@@ -157,29 +320,79 @@ impl SQLiteWorker {
                 "Commit or roll back the current transaction before downloading".into(),
             ));
         }
+        if self
+            .options
+            .as_ref()
+            .is_some_and(|options| options.read_only)
+        {
+            let filename = &self.options.as_ref().unwrap().filename;
+            return self.download_raw(filename);
+        }
         // VFS transfers require a closed database.
         self.db = None;
         let options = self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         let filename = options.filename.clone();
-        let data = if options.persist {
-            export_db(self.opfs.as_ref().unwrap(), &filename)
-        } else {
-            export_db(&self.memory, &filename)
-        };
+        let data = export_db(self.opfs.as_ref().unwrap(), &filename);
         self.reopen()?;
         Ok(DownloadDbResponse {
             filename,
             data: Uint8Array::new_from_slice(&data?),
         })
     }
+
+    fn download_file(&self, filename: &str) -> Result<DownloadDbResponse> {
+        validate_filename(filename)?;
+        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        if let Some(db) = &self.db
+            && let Some((schema, read_only)) = db.file_schema(filename, OPFS_VFS)
+        {
+            if !db.is_autocommit() {
+                return Err(WorkerError::DownloadDb(
+                    "Commit or roll back the current transaction before downloading this database"
+                        .into(),
+                ));
+            }
+            if !read_only
+                && self.contains(&format!("{filename}-wal"))?
+                && ReadOnlyFile::open(&format!("{filename}-wal"))?.len()? != 0
+            {
+                db.checkpoint(&schema)?;
+            }
+        }
+        self.download_raw(filename)
+    }
+
+    fn download_raw(&self, filename: &str) -> Result<DownloadDbResponse> {
+        self.options.as_ref().ok_or(WorkerError::NotOpened)?;
+        // This worker executes one request at a time. Reading the base VFS keeps
+        // the current SQLite connection and cipher state intact.
+        for suffix in ["-journal", "-wal"] {
+            let filename = format!("{filename}{suffix}");
+            let exists = self
+                .opfs
+                .as_ref()
+                .unwrap()
+                .contains(&filename)
+                .map_err(|error| WorkerError::DownloadDb(error.to_string()))?;
+            if !exists {
+                continue;
+            }
+            let file = ReadOnlyFile::open(&filename)?;
+            if file.len()? != 0 && (suffix == "-wal" || file.first_byte()? != 0) {
+                return Err(WorkerError::DownloadDb(
+                    "The database has a journal or WAL that needs recovery before downloading a single file".into(),
+                ));
+            }
+        }
+        let file = ReadOnlyFile::open(filename)?;
+        Ok(DownloadDbResponse {
+            filename: filename.into(),
+            data: Uint8Array::new_from_slice(&file.read_all()?),
+        })
+    }
 }
 
-fn export_db<T>(vfs: &T, filename: &str) -> Result<Vec<u8>>
-where
-    T: DbTransfer + VfsFilesManager,
-    <T as DbTransfer>::Error: std::fmt::Display,
-    <T as VfsFilesManager>::Error: std::fmt::Display,
-{
+fn export_db(vfs: &OpfsSAHPoolUtil, filename: &str) -> Result<Vec<u8>> {
     fn error(error: impl std::fmt::Display) -> WorkerError {
         WorkerError::DownloadDb(error.to_string())
     }
@@ -206,11 +419,11 @@ where
     vfs.export_db(filename).map_err(error)
 }
 
-fn import_db<T: DbTransfer>(
-    vfs: &T,
+fn import_db(
+    vfs: &OpfsSAHPoolUtil,
     filename: &str,
     db: &[u8],
-) -> std::result::Result<(), T::Error> {
+) -> std::result::Result<(), OpfsSAHError> {
     #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
     {
         vfs.import_db(filename, db)
@@ -251,6 +464,16 @@ fn validate_import_db(
     Ok(())
 }
 
+fn validate_filename(filename: &str) -> Result<()> {
+    if filename.is_empty() || matches!(filename, "." | "..") || filename.contains(['\0', '/', '\\'])
+    {
+        return Err(WorkerError::LoadDb(
+            "Choose a nonempty database filename without directory separators".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn execute_tasks(
     scope: DedicatedWorkerGlobalScope,
     mut requests: mpsc::UnboundedReceiver<WorkerRequest>,
@@ -260,9 +483,20 @@ async fn execute_tasks(
     while let Some(request) = requests.recv().await {
         let response = match request {
             WorkerRequest::Open(options) => WorkerResponse::Open(worker.open(options).await),
-            WorkerRequest::Run(options) => WorkerResponse::Run(worker.run(options)),
-            WorkerRequest::LoadDb(options) => WorkerResponse::LoadDb(worker.load_db(options)),
+            WorkerRequest::Close => WorkerResponse::Close(worker.close()),
+            WorkerRequest::CloseWorkspace(workspace) => {
+                WorkerResponse::CloseWorkspace(worker.close_workspace(&workspace))
+            }
+            WorkerRequest::Run(options) => WorkerResponse::Run(worker.run(options).await),
+            WorkerRequest::LoadDb(options) => WorkerResponse::LoadDb(worker.load_db(options).await),
+            WorkerRequest::LoadDbs(options) => {
+                WorkerResponse::LoadDbs(worker.load_dbs(options).await)
+            }
+            WorkerRequest::ListDbs => WorkerResponse::ListDbs(worker.list_dbs()),
             WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(worker.download_db()),
+            WorkerRequest::DownloadFile(filename) => {
+                WorkerResponse::DownloadDb(worker.download_file(&filename))
+            }
         };
         post_response(&scope, response);
     }

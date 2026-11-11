@@ -9,8 +9,8 @@ use web_sys::{ResizeObserver, Url};
 use crate::{
     SQLightError, SendWrapper,
     app::{
-        Engine, GlobalState, GlobalStateStoreFields, Theme, header::execute,
-        playground::ResolvedTheme,
+        Engine, GlobalState, GlobalStateStoreFields, Theme, header::execute, new_workspace,
+        playground::ResolvedTheme, rename_workspace,
     },
 };
 
@@ -62,8 +62,11 @@ pub fn Editor() -> impl IntoView {
         );
         editor.on_change(move |sql| {
             // Ace emits changes synchronously, including while the store's editor is borrowed.
+            let workspace_id = state.workspace_id().get_untracked();
             spawn_local(async move {
-                state.sql().set(sql);
+                if state.workspace_id().get_untracked() == workspace_id {
+                    state.sql().set(sql);
+                }
             });
         });
         state.editor().set(Some(SendWrapper::new(editor)));
@@ -106,22 +109,38 @@ fn load_shared_code(state: Store<GlobalState>) -> Result<(), JsValue> {
         return Ok(());
     };
 
-    state.sql().set(code);
-    if let Some(engine) = params
+    let default_engine = state.engine().get_untracked();
+    let default_keep_ctx = state.keep_ctx().get_untracked();
+    let default_read_only = state.read_only().get_untracked();
+    let engine = params
         .get("engine")
         .as_deref()
         .and_then(Engine::from_url_value)
-    {
+        .unwrap_or(default_engine);
+    let keep_ctx = match params.get("keep_ctx").as_deref() {
+        Some("1") => true,
+        Some("0") => false,
+        _ => default_keep_ctx,
+    };
+    let read_only = match params.get("read_only").as_deref() {
+        Some("1") => true,
+        Some("0") => false,
+        _ => default_read_only,
+    };
+
+    new_workspace(state);
+    rename_workspace(state, "Shared".into());
+    let database = format!("workspace-{}.db", state.workspace_id().get_untracked());
+    batch(move || {
+        state.sql().set(code);
+        state.database().set(database);
         state.engine().set(engine);
-    }
-    match params.get("keep_ctx").as_deref() {
-        Some("1") => state.keep_ctx().set(true),
-        Some("0") => state.keep_ctx().set(false),
-        _ => {}
-    }
+        state.keep_ctx().set(keep_ctx);
+        state.read_only().set(read_only);
+    });
     state.read_untracked().save();
 
-    for name in ["code", "engine", "keep_ctx"] {
+    for name in ["code", "engine", "keep_ctx", "read_only"] {
         params.delete(name);
     }
     let history = window().history()?;

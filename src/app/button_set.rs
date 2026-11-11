@@ -61,31 +61,6 @@ where
 }
 
 #[component]
-pub fn Rule() -> impl IntoView {
-    view! { <span class=styles::rule aria-hidden="true" /> }
-}
-
-#[component]
-pub fn IconButton<C>(
-    label: &'static str,
-    #[prop(default = false)] is_small: bool,
-    #[prop(optional)] node_ref: NodeRef<html::element::Button>,
-    on_click: C,
-    children: Children,
-) -> impl IntoView
-where
-    C: FnMut(MouseEvent) + Send + 'static,
-{
-    let style = if is_small { styles::small } else { "" };
-    let style = format!("{} {style}", styles::icon);
-    view! {
-        <button type="button" node_ref=node_ref class=style aria-label=label on:click=on_click>
-            {children()}
-        </button>
-    }
-}
-
-#[component]
 pub fn LinkButton(href: String, label: &'static str, children: Children) -> impl IntoView {
     view! {
         <a class=styles::icon href=href aria-label=label target="_blank" rel="noopener noreferrer">

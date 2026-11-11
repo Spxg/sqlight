@@ -25,7 +25,66 @@ impl SQLiteDb {
         unsafe { sqlite3_get_autocommit(self.handle) != 0 }
     }
 
-    pub fn open(filename: &str) -> Result<Self> {
+    pub fn attachment_limit(&self) -> usize {
+        unsafe { sqlite3_limit(self.handle, SQLITE_LIMIT_ATTACHED, -1) }.max(0) as usize
+    }
+
+    pub fn uses_file(&self, filename: &str, vfs_name: &str) -> bool {
+        self.file_schema(filename, vfs_name).is_some()
+    }
+
+    pub fn file_schema(&self, filename: &str, vfs_name: &str) -> Option<(String, bool)> {
+        let mut index = 0;
+        loop {
+            let schema = unsafe { sqlite3_db_name(self.handle, index) };
+            if schema.is_null() {
+                return None;
+            }
+            let path = unsafe { sqlite3_db_filename(self.handle, schema) };
+            if !path.is_null() && unsafe { CStr::from_ptr(path) }.to_bytes() == filename.as_bytes()
+            {
+                let mut vfs: *mut sqlite3_vfs = std::ptr::null_mut();
+                let code = unsafe {
+                    sqlite3_file_control(
+                        self.handle,
+                        schema,
+                        SQLITE_FCNTL_VFS_POINTER,
+                        (&mut vfs as *mut *mut sqlite3_vfs).cast(),
+                    )
+                };
+                if code != SQLITE_OK
+                    || vfs.is_null()
+                    || unsafe { CStr::from_ptr((*vfs).zName) }.to_bytes() == vfs_name.as_bytes()
+                {
+                    let read_only = unsafe { sqlite3_db_readonly(self.handle, schema) != 0 };
+                    let name = unsafe { CStr::from_ptr(schema) }
+                        .to_string_lossy()
+                        .into_owned();
+                    return Some((name, read_only));
+                }
+            }
+            index += 1;
+        }
+    }
+
+    pub fn checkpoint(&self, schema: &str) -> Result<()> {
+        let schema = CString::new(schema).map_err(|_| SQLitendError::ToCStr)?;
+        let code = unsafe {
+            sqlite3_wal_checkpoint_v2(
+                self.handle,
+                schema.as_ptr(),
+                SQLITE_CHECKPOINT_TRUNCATE,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if code != SQLITE_OK {
+            return Err(SQLitendError::Step(sqlite_error(code, self.handle)));
+        }
+        Ok(())
+    }
+
+    pub fn open(filename: &str, read_only: bool) -> Result<Self> {
         unsafe {
             sqlite3_auto_extension(Some(std::mem::transmute::<
                 *const (),
@@ -42,7 +101,12 @@ impl SQLiteDb {
             sqlite3_open_v2(
                 filename.as_ptr(),
                 &mut handle,
-                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI,
+                SQLITE_OPEN_URI
+                    | if read_only {
+                        SQLITE_OPEN_READONLY
+                    } else {
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                    },
                 std::ptr::null(),
             )
         };

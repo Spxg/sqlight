@@ -9,20 +9,18 @@ use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{Blob, BlobPropertyBag, Event, HtmlInputElement, MouseEvent, Url};
 
 use crate::{
-    LoadDbOptions, RunOptions, SQLightError, SendWrapper, WorkerRequest,
+    DatabaseFile, LoadDbsOptions, RunOptions, SQLightError, SendWrapper, WorkerRequest,
     app::{
         ImportProgress,
-        advanced_options_menu::AdvancedOptionsMenu,
-        button_set::{Button, ButtonSet, IconButton, LinkButton, Rule},
+        button_set::{Button, ButtonSet, LinkButton},
         config_menu::ConfigMenu,
-        context_menu::ContextMenu,
         database_menu::DatabaseMenu,
-        icon::{build_icon, config_icon, expandable_icon, github_icon, more_options_icon},
+        icon::{build_icon, config_icon, expandable_icon, github_icon},
         output::change_focus,
         pop_button::PopButton,
         state::{Focus, GlobalState, GlobalStateStoreFields},
         tools_menu::ToolsMenu,
-        vfs_menu::VfsMenu,
+        workspace_menu::WorkspaceMenu,
     },
     send_request,
 };
@@ -45,16 +43,14 @@ pub fn Header() -> impl IntoView {
                     </ButtonSet>
 
                     <ButtonSet>
-                        <VfsMenuButton menu_container=menu_container />
-                        <Rule />
-                        <ContextMenuButton menu_container=menu_container />
-                        <Rule />
-                        <AdvancedOptionsMenuButton menu_container=menu_container />
+                        <WorkspaceMenuButton menu_container=menu_container />
                     </ButtonSet>
+
                 </div>
                 <div class=styles::right>
                     <input
                         type="file"
+                        multiple
                         node_ref=input_ref
                         style="display: none"
                         on:change=move |event| import_database(state, event)
@@ -85,7 +81,7 @@ pub fn Header() -> impl IntoView {
 
 pub fn execute(state: Store<GlobalState>) -> Box<dyn Fn() + Send + 'static> {
     Box::new(move || {
-        if state.is_running().get_untracked() {
+        if state.is_busy().get_untracked() {
             return;
         }
         let editor_guard = state.editor().read_untracked();
@@ -129,7 +125,7 @@ fn ExecuteButton() -> impl IntoView {
         <Button
             is_primary=true
             icon_right=build_icon()
-            disabled=Signal::derive(move || state.is_running().get())
+            disabled=Signal::derive(move || state.is_busy().get())
             on_click=move |_| on_click()
         >
             "Run"
@@ -138,13 +134,32 @@ fn ExecuteButton() -> impl IntoView {
 }
 
 #[component]
-fn VfsMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
+fn WorkspaceMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
-
     let button = move |toggle, node_ref| {
         view! {
             <Button icon_right=expandable_icon() on_click=toggle node_ref=node_ref>
-                {move || state.vfs().read().value()}
+                "Workspace: "
+                <span class=styles::workspaceName>{move || state.workspace_name().get()}</span>
+                " "
+                <span class=styles::workspaceMode>
+                    <span
+                        style:visibility=move || {
+                            if state.read_only().get() { "visible" } else { "hidden" }
+                        }
+                        aria-hidden=move || (!state.read_only().get()).to_string()
+                    >
+                        "(Read only)"
+                    </span>
+                    <span
+                        style:visibility=move || {
+                            if state.read_only().get() { "hidden" } else { "visible" }
+                        }
+                        aria-hidden=move || state.read_only().get().to_string()
+                    >
+                        "(Read write)"
+                    </span>
+                </span>
             </Button>
         }
         .into_any()
@@ -153,31 +168,9 @@ fn VfsMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
     view! {
         <PopButton
             button=button
-            menu=Box::new(|_close| { view! { <VfsMenu /> }.into_any() })
+            menu=Box::new(|_close| view! { <WorkspaceMenu /> }.into_any())
             menu_container=menu_container
-        ></PopButton>
-    }
-}
-
-#[component]
-fn ContextMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
-    let state = expect_context::<Store<GlobalState>>();
-
-    let button = move |toggle, node_ref| {
-        view! {
-            <Button icon_right=expandable_icon() on_click=toggle node_ref=node_ref>
-                {move || if *state.keep_ctx().read() { "Keep Context" } else { "Drop Context" }}
-            </Button>
-        }
-        .into_any()
-    };
-
-    view! {
-        <PopButton
-            button=button
-            menu=Box::new(|_close| { view! { <ContextMenu /> }.into_any() })
-            menu_container=menu_container
-        ></PopButton>
+        />
     }
 }
 
@@ -201,26 +194,6 @@ fn ConfigMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoVie
         <PopButton
             button=button
             menu=Box::new(|_close| { view! { <ConfigMenu /> }.into_any() })
-            menu_container=menu_container
-        ></PopButton>
-    }
-}
-
-#[component]
-fn AdvancedOptionsMenuButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
-    let button = |toggle, node_ref| {
-        view! {
-            <IconButton label="Advanced options" on_click=toggle node_ref=node_ref>
-                {more_options_icon()}
-            </IconButton>
-        }
-        .into_any()
-    };
-
-    view! {
-        <PopButton
-            button=button
-            menu=Box::new(|_close| { view! { <AdvancedOptionsMenu /> }.into_any() })
             menu_container=menu_container
         ></PopButton>
     }
@@ -261,6 +234,9 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
     };
 
     let on_embed = move |_event, signal: WriteSignal<bool>| {
+        if state.is_busy().get_untracked() {
+            return;
+        }
         let editor_guard = state.editor().read_untracked();
         let Some(editor) = editor_guard.as_ref() else {
             return;
@@ -286,6 +262,7 @@ fn ToolsButton(menu_container: NodeRef<html::element::Div>) -> impl IntoView {
             menu=Box::new(move |signal: WriteSignal<bool>| {
                 view! {
                     <ToolsMenu
+                        busy=Signal::derive(move || state.is_busy().get())
                         on_format=move |e| {
                             on_format(e, signal);
                         }
@@ -321,6 +298,9 @@ fn DatabaseButton(
     };
 
     let on_load = move |_: MouseEvent, signal: WriteSignal<bool>| {
+        if state.is_busy().get_untracked() {
+            return;
+        }
         if let Some(input) = input_ref.get_untracked() {
             input.set_value("");
             input.click();
@@ -362,8 +342,8 @@ fn DatabaseButton(
         );
     });
 
-    let on_download = move |_: MouseEvent, signal: WriteSignal<bool>| {
-        send_request(state, WorkerRequest::DownloadDb);
+    let on_download = move |filename: String, signal: WriteSignal<bool>| {
+        send_request(state, WorkerRequest::DownloadFile(filename));
         signal.set(false);
     };
 
@@ -373,13 +353,9 @@ fn DatabaseButton(
             menu=Box::new(move |signal| {
                 view! {
                     <DatabaseMenu
-                        importing=Signal::derive(move || {
-                            state.import_progress().read().as_ref().is_some_and(|progress| {
-                                progress.opened.is_none()
-                            })
-                        })
+                        busy=Signal::derive(move || state.is_busy().get())
                         load=move |e| on_load(e, signal)
-                        download=move |e| on_download(e, signal)
+                        download=move |filename| on_download(filename, signal)
                     />
                 }
                     .into_any()
@@ -416,6 +392,14 @@ fn ShareButton() -> impl IntoView {
                     "0"
                 },
             );
+            params.set(
+                "read_only",
+                if state.read_only().get_untracked() {
+                    "1"
+                } else {
+                    "0"
+                },
+            );
             Ok(url.href())
         }) {
             state.share_href().set(Some(href));
@@ -433,30 +417,77 @@ fn GithubButton() -> impl IntoView {
 }
 
 fn import_database(state: Store<GlobalState>, event: Event) {
+    if state.is_busy().get_untracked() {
+        return;
+    }
     let input = event_target::<HtmlInputElement>(&event);
-    let Some(file) = input.files().and_then(|files| files.get(0)) else {
+    let Some(files) = input.files() else {
         return;
     };
-    let total = file.size();
+    let files = (0..files.length())
+        .map(|index| files.get(index).unwrap())
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return;
+    }
+
+    state.is_busy().set(true);
+    let existing = state.databases().get_untracked();
+    let collisions = files
+        .iter()
+        .map(|file| file.name())
+        .filter(|name| existing.contains(name))
+        .collect::<Vec<_>>();
+    let replace = !collisions.is_empty();
+    if replace
+        && !window()
+            .confirm_with_message(&format!(
+                "Replace existing databases: {}?",
+                collisions.join(", ")
+            ))
+            .unwrap_or(false)
+    {
+        state.is_busy().set(false);
+        return;
+    }
+
+    let total = files.iter().map(|file| file.size()).sum();
+    let filenames = files.iter().map(|file| file.name()).collect::<Vec<_>>();
     state.last_error().set(None);
     state.import_progress().set(Some(ImportProgress {
-        filename: file.name(),
+        filename: filenames.join(", "),
         loaded: 0.0,
         total,
         opened: None,
     }));
     spawn_local(async move {
-        match JsFuture::from(file.array_buffer()).await {
-            Ok(buffer) => {
+        let imported = async {
+            let mut imported = Vec::with_capacity(files.len());
+            let mut loaded = 0.0;
+            for file in files {
+                let buffer = JsFuture::from(file.array_buffer()).await?;
+                loaded += file.size();
                 state.import_progress().update(|progress| {
                     if let Some(progress) = progress {
-                        progress.loaded = total;
+                        progress.loaded = loaded;
                     }
                 });
-                let data = js_sys::Uint8Array::new(&buffer);
-                send_request(state, WorkerRequest::LoadDb(LoadDbOptions { data }));
+                imported.push(DatabaseFile {
+                    filename: file.name(),
+                    data: js_sys::Uint8Array::new(&buffer),
+                });
             }
+            Ok::<_, wasm_bindgen::JsValue>(imported)
+        }
+        .await;
+
+        match imported {
+            Ok(files) => send_request(
+                state,
+                WorkerRequest::LoadDbs(LoadDbsOptions { files, replace }),
+            ),
             Err(error) => {
+                state.is_busy().set(false);
                 state.import_progress().update(|progress| {
                     if let Some(progress) = progress {
                         progress.opened = Some(false);

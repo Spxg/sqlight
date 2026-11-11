@@ -105,6 +105,11 @@ export function bindCommandShortcut(editor, command) {
     editor.container.addEventListener("keydown", onKeyDown, true);
     return () => editor.container.removeEventListener("keydown", onKeyDown, true);
 }
+
+export function setWorkspaceValue(editor, value) {
+    editor.setValue(value, -1);
+    editor.session.getUndoManager().reset();
+}
 "#)]
     extern "C" {
         #[wasm_bindgen(js_name = defineVimWrite, catch)]
@@ -112,6 +117,9 @@ export function bindCommandShortcut(editor, command) {
 
         #[wasm_bindgen(js_name = bindCommandShortcut)]
         pub fn bind_command_shortcut(editor: &Editor, command: &JsValue) -> Function;
+
+        #[wasm_bindgen(js_name = setWorkspaceValue)]
+        pub fn set_workspace_value(editor: &Editor, value: &str);
     }
 
     #[wasm_bindgen]
@@ -309,6 +317,10 @@ impl Editor {
 
     pub fn set_value(&self, value: String) {
         self.js.set_value(&value, -1);
+    }
+
+    pub fn set_workspace_value(&self, value: String) {
+        bindgen::set_workspace_value(&self.js, &value);
     }
 
     pub fn get_range(&self) -> Range {

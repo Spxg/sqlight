@@ -30,7 +30,7 @@ export async function checkSharing(page) {
 
   function assertConsumed(href) {
     const url = new URL(href);
-    for (const name of ['code', 'engine', 'keep_ctx']) {
+    for (const name of ['code', 'engine', 'keep_ctx', 'read_only']) {
       assert.equal(url.searchParams.has(name), false, `${name} was consumed`);
     }
     assert.deepEqual(url.searchParams.getAll('campaign'), [
@@ -44,37 +44,31 @@ export async function checkSharing(page) {
     const source = await open(context, base.href);
     const engines = [
       [
-        'SQLite', 'sqlite3', 'SQLite', false,
+        'SQLite', 'sqlite3', 'SQLite', false, false,
         "SELECT '你好 + & # ?' AS shared;", 'shared',
       ],
       [
-        'SQLite3 Multiple Ciphers', 'sqlite3mc', 'MultipleCiphers', true,
+        'SQLite3 Multiple Ciphers', 'sqlite3mc', 'MultipleCiphers', true, false,
         "SELECT sqlite3mc_config('cipher') AS cipher;", 'cipher',
       ],
       [
-        'SQLCipher', 'sqlcipher', 'SQLCipher', false,
+        'SQLCipher', 'sqlcipher', 'SQLCipher', false, true,
         'PRAGMA cipher_version;', 'cipher_version',
       ],
     ];
 
-    for (const [label, engine, storedEngine, keepContext, sql, column] of engines) {
+    for (const [label, engine, storedEngine, keepContext, readOnly, sql, column] of engines) {
       await source
-        .getByRole('button', { name: 'Advanced options', exact: true })
+        .getByRole('button', { name: /^Workspace: / })
         .click();
       await source
         .getByRole('combobox', { name: 'SQLite Engine', exact: true })
         .selectOption(label);
+      await source.getByRole('checkbox', { name: 'Read only', exact: true })
+        .setChecked(readOnly);
+      await source.getByRole('checkbox', { name: 'Fresh database per run', exact: true })
+        .setChecked(!keepContext);
       await closeMenu(source);
-      const mode = keepContext ? 'Keep Context' : 'Drop Context';
-      if (!(await source.getByRole('button', { name: mode, exact: true }).count())) {
-        await source.getByRole('button', {
-          name: keepContext ? 'Drop Context' : 'Keep Context', exact: true,
-        }).click();
-        await source.getByRole('dialog').getByRole('button', {
-          name: new RegExp(`^${mode}`),
-        }).click();
-        await closeMenu(source);
-      }
       await edit(source, sql);
       await source.getByRole('button', { name: 'Share', exact: true }).click();
       const href = await source
@@ -84,6 +78,7 @@ export async function checkSharing(page) {
       assert.equal(params.get('code'), sql);
       assert.equal(params.get('engine'), engine);
       assert.equal(params.get('keep_ctx'), keepContext ? '1' : '0');
+      assert.equal(params.get('read_only'), readOnly ? '1' : '0');
 
       const recipientContext = await browser.newContext();
       try {
@@ -94,6 +89,7 @@ export async function checkSharing(page) {
         }, {
           engine: storedEngine === 'SQLite' ? 'SQLCipher' : 'SQLite',
           keep_ctx: !keepContext,
+          read_only: !readOnly,
           sql: 'SELECT 0 AS saved_draft;',
           theme: 'Dark',
         });
@@ -105,12 +101,19 @@ export async function checkSharing(page) {
           'Opening a link does not run SQL',
         );
         await recipient.waitForFunction(
-          ({ engine, keepContext, sql }) => {
+          ({ engine, keepContext, readOnly, sql }) => {
             const config = JSON.parse(localStorage.getItem('config'));
             return config.engine === engine &&
-              config.keep_ctx === keepContext && config.sql === sql;
+              config.keep_ctx === keepContext && config.read_only === readOnly &&
+              config.sql === sql &&
+              config.database === `workspace-${config.workspace_id}.db` &&
+              !['default.db', 'test.db'].includes(config.database) &&
+              config.workspace_name === 'Shared' && config.workspaces.some(
+                (workspace) => workspace.id === 'default' &&
+                  workspace.sql === 'SELECT 0 AS saved_draft;',
+              );
           },
-          { engine: storedEngine, keepContext, sql },
+          { engine: storedEngine, keepContext, readOnly, sql },
         );
         assert.equal(
           await recipient.evaluate(() =>
@@ -153,12 +156,13 @@ export async function checkSharing(page) {
       await recipient.waitForFunction(() =>
         JSON.parse(localStorage.getItem('config'))?.sql === 'SELECT 719 AS legacy_share;',
       );
+      await recipient.getByRole('button', { name: /^Workspace: / }).click();
       assert.equal(
-        await recipient
-          .getByRole('button', { name: 'Keep Context', exact: true })
-          .count(),
-        1,
+        await recipient.getByRole('checkbox', { name: 'Fresh database per run', exact: true })
+          .isChecked(),
+        false,
       );
+      await closeMenu(recipient);
       assertConsumed(recipient.url());
       legacy.searchParams.set('code', '');
       legacy.searchParams.set('engine', 'unsupported');
@@ -204,6 +208,46 @@ export async function checkSharing(page) {
       (sql) => ace.edit('ace_editor').getValue() === sql,
       lastEdit,
     );
+
+    // Running a shared scratch database preserves this browser's original file.
+    await reopened.getByRole('button', { name: /^Workspace: / }).click();
+    await reopened.getByRole('combobox', { name: 'SQLite Engine', exact: true })
+      .selectOption('SQLite');
+    await reopened.getByRole('checkbox', { name: 'Read only', exact: true })
+      .uncheck();
+    await reopened.getByRole('checkbox', { name: 'Fresh database per run', exact: true })
+      .uncheck();
+    await closeMenu(reopened);
+    await edit(reopened, `CREATE TABLE share_original_data(value INTEGER);
+      INSERT INTO share_original_data VALUES (1091);`);
+    await reopened.getByRole('button', { name: 'Run', exact: true }).click();
+    await reopened.getByText('Finished', { exact: true }).waitFor();
+    const scratchQuery = 'SELECT count(*) AS scratch_tables FROM sqlite_schema;';
+    await edit(reopened, scratchQuery);
+    await reopened.getByRole('button', { name: 'Share', exact: true }).click();
+    const scratchHref = await reopened.getByRole('link', {
+      name: 'Embedded code in link',
+    }).getAttribute('href');
+    const scratch = await open(context, scratchHref);
+    assert.equal(await scratch.getByRole('tabpanel').count(), 0);
+
+    // Closing the source releases the engine's OPFS lock for the new tab.
+    await reopened.close();
+    await scratch.getByRole('button', { name: 'Run', exact: true }).click();
+    await scratch.getByRole('cell', { name: '0', exact: true }).waitFor();
+    await scratch.getByText('Finished', { exact: true }).waitFor();
+    await scratch.close();
+
+    const preserved = await open(context, base.href);
+    await preserved.getByRole('button', { name: /^Workspace: / }).click();
+    await preserved.getByRole('combobox', { name: 'Workspace', exact: true })
+      .selectOption('default');
+    await closeMenu(preserved);
+    assert.equal(await preserved.evaluate(() => ace.edit('ace_editor').getValue()), scratchQuery);
+    await edit(preserved, 'SELECT value FROM share_original_data;');
+    await preserved.getByRole('button', { name: 'Run', exact: true }).click();
+    await preserved.getByRole('cell', { name: '1091', exact: true }).waitFor();
+    await preserved.getByText('Finished', { exact: true }).waitFor();
   } finally {
     await context.close();
   }

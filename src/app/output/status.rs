@@ -18,12 +18,20 @@ fn error_details(error: &SQLightError) -> &'static str {
                 SQLitendError::OpenDb(error)
                 | SQLitendError::Prepare(error)
                 | SQLitendError::Step(error)
+                    if error.code == 8 =>
+                {
+                    "This workspace is read only. Turn off Read only in its connection \
+                    settings to allow SQL writes."
+                }
+                SQLitendError::OpenDb(error)
+                | SQLitendError::Prepare(error)
+                | SQLitendError::Step(error)
                     if error.code == 26 =>
                 {
                     "Check the SQLite engine, encryption key, and cipher settings."
                 }
                 SQLitendError::OpenDb(_) => {
-                    "If the database is malformed, choose Drop Context and run the query again."
+                    "Check the selected main database in the workspace settings."
                 }
                 SQLitendError::Prepare(_) => {
                     "Check the SQL syntax. Earlier statements may have completed; \
@@ -34,16 +42,24 @@ fn error_details(error: &SQLightError) -> &'static str {
                     automatically rolled back."
                 }
             },
-            WorkerError::NotOpened => "Try switching the VFS and running the query again.",
+            WorkerError::NotOpened => {
+                "Select a main database in the workspace settings and run the query again."
+            }
             WorkerError::Unexpected => "Please report this error on GitHub.",
-            WorkerError::InvalidState => "Choose Drop Context and run the query again.",
+            WorkerError::InvalidState => {
+                "Enable Fresh database per run to rebuild the selected main database, then run again."
+            }
             WorkerError::LoadDb(_) => "Check that the imported file is a SQLite database.",
             WorkerError::DownloadDb(_) => {
                 "Commit or roll back any active transaction, then try downloading again."
             }
+            WorkerError::ActiveTransaction => {
+                "Previous database settings were restored. Run COMMIT or ROLLBACK, \
+                then try again."
+            }
             WorkerError::OpfsSAHPoolOpened => {
-                "OPFS allows only one browser tab to access this database at a time. \
-                Close other tabs and reload, or switch to the Memory VFS."
+                "OPFS storage is already open in another browser tab. \
+                Close that tab and try again."
             }
             WorkerError::Transport(_) => {
                 "Reload the page and check the browser console for details."

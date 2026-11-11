@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS demo_sales (
     quantity INTEGER NOT NULL
 );
 
--- Fixed IDs make this example safe to run again with Keep Context enabled.
+-- Fixed IDs make this example safe to run again without resetting the database.
 INSERT INTO demo_books (id, title, price_cents) VALUES
     (1, 'The Rust Book', 3500),
     (2, 'SQLite in Practice', 2800),

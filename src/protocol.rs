@@ -13,6 +13,8 @@ pub enum WorkerError {
     InvalidState,
     #[error("OPFS already opened")]
     OpfsSAHPoolOpened,
+    #[error("Commit or roll back the current transaction before switching database settings")]
+    ActiveTransaction,
     #[error("Failed to load db: {0}")]
     LoadDb(String),
     #[error("Failed to download db: {0}")]
@@ -26,17 +28,26 @@ pub enum WorkerError {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerRequest {
     Open(OpenOptions),
+    Close,
+    CloseWorkspace(String),
     Run(RunOptions),
     LoadDb(LoadDbOptions),
+    LoadDbs(LoadDbsOptions),
+    ListDbs,
     DownloadDb,
+    DownloadFile(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerResponse {
     Ready,
     Open(Result<()>),
+    Close(Result<()>),
+    CloseWorkspace(Result<()>),
     Run(Result<SQLiteRunResult>),
     LoadDb(Result<()>),
+    LoadDbs(Result<Vec<String>>),
+    ListDbs(Result<Vec<String>>),
     DownloadDb(Result<DownloadDbResponse>),
 }
 
@@ -47,16 +58,36 @@ pub struct DownloadDbResponse {
     pub(crate) data: Uint8Array,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenOptions {
     pub filename: String,
-    pub persist: bool,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default = "default_workspace")]
+    pub workspace: String,
+}
+
+fn default_workspace() -> String {
+    "default".into()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoadDbOptions {
     #[serde(with = "serde_wasm_bindgen::preserve")]
     pub data: Uint8Array,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseFile {
+    pub filename: String,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    pub data: Uint8Array,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoadDbsOptions {
+    pub files: Vec<DatabaseFile>,
+    pub replace: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -113,4 +144,17 @@ pub enum SQLitendError {
     Utf8Text,
     #[error("Unsupported column type: {0}")]
     UnsupportedColumnType(i32),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_open_requests_use_the_default_writable_workspace() {
+        let options: OpenOptions =
+            serde_json::from_str(r#"{"filename":"test.db","persist":false}"#).unwrap();
+        assert!(!options.read_only);
+        assert_eq!(options.workspace, "default");
+    }
 }

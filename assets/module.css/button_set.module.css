@@ -120,13 +120,6 @@ $radius: 4px;
   transform: translate(var(--button-side-icon-nudge), 0);
 }
 
-.rule {
-  composes: -border;
-  background-color: var(--button-secondary-border-color);
-  width: 1px;
-  border-color: var(--button-secondary-border-color);
-}
-
 .icon {
   composes: secondary;
   padding: 0;

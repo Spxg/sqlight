@@ -8,7 +8,12 @@ use crate::app::{
 };
 
 #[component]
-pub fn ToolsMenu<F, E, I>(on_format: F, on_embed: E, on_internal: I) -> impl IntoView
+pub fn ToolsMenu<F, E, I>(
+    on_format: F,
+    on_embed: E,
+    on_internal: I,
+    busy: Signal<bool>,
+) -> impl IntoView
 where
     F: Fn(MouseEvent) + Send + 'static,
     E: Fn(MouseEvent) + Send + 'static,
@@ -19,8 +24,8 @@ where
             <ButtonMenuItem name="Format SQL".into() on_click=on_format>
                 <MenuAside>"Format SQL with uppercase keywords."</MenuAside>
             </ButtonMenuItem>
-            <ButtonMenuItem name="Embed Query Result".into() on_click=on_embed>
-                <MenuAside>"Embed results into query statements for easy sharing."</MenuAside>
+            <ButtonMenuItem name="Embed Query Result".into() on_click=on_embed disabled=busy>
+                <MenuAside>"Run SQL and insert the results as comments for easy sharing."</MenuAside>
             </ButtonMenuItem>
             <LinkMenuItem
                 name="SQLite internals".into()

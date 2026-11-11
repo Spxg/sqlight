@@ -197,7 +197,6 @@ fn handle_save_state(state: Store<GlobalState>) {
 
     Effect::watch(
         move || {
-            state.vfs().track();
             state.editor_config().track();
             state.orientation().track();
             state.theme().track();
@@ -205,6 +204,11 @@ fn handle_save_state(state: Store<GlobalState>) {
             state.sql().track();
             state.run_selected_sql().track();
             state.engine().track();
+            state.workspace_id().track();
+            state.workspace_name().track();
+            state.workspaces().track();
+            state.read_only().track();
+            state.database().track();
         },
         move |_, _, _| {
             if let Some(timeout) = pending.get_value() {

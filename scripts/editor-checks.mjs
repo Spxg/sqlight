@@ -76,12 +76,11 @@ export async function checkEditor(page) {
 
   async function selectSql(enabled) {
     await page
-      .getByRole('button', { name: 'Advanced options', exact: true })
+      .getByRole('button', { name: 'Config', exact: true })
       .click();
     await page
-      .getByRole('group', { name: 'Run Selected SQL', exact: true })
-      .getByText(enabled ? 'On' : 'Off', { exact: true })
-      .click();
+      .getByRole('checkbox', { name: 'Run Selected SQL', exact: true })
+      .setChecked(enabled);
     await closeMenu();
   }
 
@@ -138,11 +137,10 @@ export async function checkEditor(page) {
     .inputValue();
   await closeMenu();
   await page
-    .getByRole('button', { name: 'Advanced options', exact: true })
+    .getByRole('button', { name: 'Config', exact: true })
     .click();
   const originalRunSelected = await page
-    .getByRole('group', { name: 'Run Selected SQL', exact: true })
-    .getByRole('radio', { name: 'On', exact: true })
+    .getByRole('checkbox', { name: 'Run Selected SQL', exact: true })
     .isChecked();
   await closeMenu();
 
@@ -280,7 +278,7 @@ export async function checkEditor(page) {
       true,
       'The 390px layout has no horizontal page overflow',
     );
-    for (const name of ['Config', 'Advanced options']) {
+    for (const name of ['Config', /^Workspace: /]) {
       const button = page.getByRole('button', { name, exact: true });
       const box = await button.boundingBox();
       assert.ok(

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use leptos::prelude::*;
 use reactive_stores::Store;
@@ -11,7 +11,7 @@ use crate::{
     OpenOptions, SQLightError, SQLiteRunResult, SendWrapper, WorkerError, WorkerRequest,
     WorkerResponse,
     app::{
-        Engine, Exported, Focus, GlobalState, GlobalStateStoreFields, Vfs, change_focus,
+        Engine, Exported, Focus, GlobalState, GlobalStateStoreFields, change_focus,
         embed_query_result,
     },
 };
@@ -20,15 +20,13 @@ type Result<T> = std::result::Result<T, WorkerError>;
 type Session = Rc<Mutex<Option<WorkerSession>>>;
 
 thread_local! {
-    static SQLITE: Session = Session::default();
-    static SQLITE_MC: Session = Session::default();
-    static SQLCIPHER: Session = Session::default();
+    static SESSIONS: RefCell<HashMap<Engine, Session>> = RefCell::default();
 }
 
 struct WorkerSession {
     worker: Worker,
     responses: mpsc::UnboundedReceiver<Result<WorkerResponse>>,
-    persist: Option<bool>,
+    opened: Option<OpenOptions>,
     _on_message: Closure<dyn FnMut(MessageEvent)>,
     _on_error: Closure<dyn FnMut(ErrorEvent)>,
 }
@@ -54,7 +52,7 @@ impl WorkerSession {
         let mut session = Self {
             worker,
             responses,
-            persist: None,
+            opened: None,
             _on_message: on_message,
             _on_error: on_error,
         };
@@ -78,22 +76,21 @@ impl WorkerSession {
         self.receive().await
     }
 
-    async fn connect(&mut self, persist: bool) -> Result<()> {
-        if self.persist == Some(persist) {
+    async fn connect(&mut self, options: OpenOptions) -> Result<()> {
+        if self.opened.as_ref() == Some(&options) {
             return Ok(());
         }
-        self.persist = None;
-        match self
-            .request(WorkerRequest::Open(OpenOptions {
-                filename: "test.db".into(),
-                persist,
-            }))
-            .await?
-        {
-            WorkerResponse::Open(result) => {
-                result?;
-                self.persist = Some(persist);
+        let previous = self.opened.take();
+        match self.request(WorkerRequest::Open(options.clone())).await? {
+            WorkerResponse::Open(Ok(())) => {
+                self.opened = Some(options);
                 Ok(())
+            }
+            WorkerResponse::Open(Err(error)) => {
+                if matches!(error, WorkerError::ActiveTransaction) {
+                    self.opened = previous;
+                }
+                Err(error)
             }
             _ => Err(WorkerError::Unexpected),
         }
@@ -114,25 +111,39 @@ fn transport_error(error: wasm_bindgen::JsValue) -> WorkerError {
 
 pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
     let running = matches!(request, WorkerRequest::Run(_));
-    if running && state.is_running().get_untracked() {
+    let importing = matches!(
+        request,
+        WorkerRequest::LoadDb(_) | WorkerRequest::LoadDbs(_)
+    );
+    if state.is_busy().get_untracked() && !importing {
         return;
     }
+    state.is_busy().set(true);
     if running {
         state.is_running().set(true);
     }
-    state.last_error().set(None);
+    if !matches!(request, WorkerRequest::ListDbs) {
+        state.last_error().set(None);
+    }
 
     let embed_sql = match &request {
         WorkerRequest::Run(options) if options.embed => Some(options.sql.clone()),
         _ => None,
     };
-    let persist = state.vfs().get_untracked() == Vfs::OPFS;
-    let (session, uri) = match state.engine().get_untracked() {
-        Engine::SQLite => (SQLITE.with(Clone::clone), "./sqlite3_loader.js"),
-        Engine::MultipleCiphers => (SQLITE_MC.with(Clone::clone), "./sqlite3mc_loader.js"),
-        Engine::SQLCipher => (SQLCIPHER.with(Clone::clone), "./sqlcipher_loader.js"),
+    let workspace = state.workspace_id().get_untracked();
+    let engine = state.engine().get_untracked();
+    let options = OpenOptions {
+        filename: state.with_untracked(GlobalState::database_filename),
+        read_only: state.read_only().get_untracked(),
+        workspace: workspace.clone(),
     };
-    let importing = matches!(request, WorkerRequest::LoadDb(_));
+    let session =
+        SESSIONS.with(|sessions| sessions.borrow_mut().entry(engine).or_default().clone());
+    let uri = match engine {
+        Engine::SQLite => "./sqlite3_loader.js",
+        Engine::MultipleCiphers => "./sqlite3mc_loader.js",
+        Engine::SQLCipher => "./sqlcipher_loader.js",
+    };
 
     spawn_local(async move {
         let mut session = session.lock().await;
@@ -141,7 +152,7 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
                 *session = Some(WorkerSession::start(uri).await?);
             }
             let worker = session.as_mut().unwrap();
-            worker.connect(persist).await?;
+            worker.connect(options).await?;
             worker.request(request).await
         }
         .await;
@@ -149,8 +160,21 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
         if matches!(response, Err(WorkerError::Transport(_))) {
             *session = None;
         }
-        if running {
-            state.is_running().set(false);
+        if state.workspace_id().get_untracked() != workspace {
+            return;
+        }
+        if matches!(
+            response,
+            Err(WorkerError::ActiveTransaction)
+                | Ok(WorkerResponse::LoadDb(Err(WorkerError::ActiveTransaction)))
+                | Ok(WorkerResponse::LoadDbs(Err(WorkerError::ActiveTransaction)))
+        ) && let Some(options) = session.as_ref().and_then(|worker| worker.opened.as_ref())
+        {
+            batch(move || {
+                state.database().set(options.filename.clone());
+                state.read_only().set(options.read_only);
+                state.keep_ctx().set(true);
+            });
         }
         match response {
             Ok(response) => handle_response(state, response, embed_sql.as_deref()),
@@ -167,6 +191,12 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
                     .set(Some(SQLightError::new_worker(error)));
             }
         }
+        batch(move || {
+            if running {
+                state.is_running().set(false);
+            }
+            state.is_busy().set(false);
+        });
     });
 }
 
@@ -214,20 +244,52 @@ fn handle_response(state: Store<GlobalState>, response: WorkerResponse, embed_sq
                     progress.opened = Some(success);
                 }
             });
-            if success {
-                state.keep_ctx().set(true);
-            }
             if let Err(err) = result {
                 state.last_error().set(Some(SQLightError::new_worker(err)));
             }
         }
+        WorkerResponse::LoadDbs(result) => {
+            state.import_progress().update(|progress| {
+                if let Some(progress) = progress {
+                    progress.opened = Some(result.is_ok());
+                }
+            });
+            match result {
+                Ok(filenames) => {
+                    state.databases().update(|databases| {
+                        for filename in filenames {
+                            if !databases.contains(&filename) {
+                                databases.push(filename);
+                            }
+                        }
+                        databases.sort();
+                    });
+                }
+                Err(error) => state
+                    .last_error()
+                    .set(Some(SQLightError::new_worker(error))),
+            }
+        }
+        WorkerResponse::ListDbs(result) => match result {
+            Ok(databases) => state.databases().set(databases),
+            Err(error) => state
+                .last_error()
+                .set(Some(SQLightError::new_worker(error))),
+        },
         WorkerResponse::DownloadDb(result) => match result {
-            Ok(response) => state.exported().set(Some(Exported {
-                filename: response.filename,
-                data: SendWrapper::new(response.data),
-            })),
+            Ok(response) => {
+                state.exported().set(Some(Exported {
+                    filename: response.filename,
+                    data: SendWrapper::new(response.data),
+                }));
+            }
             Err(err) => state.last_error().set(Some(SQLightError::new_worker(err))),
         },
-        WorkerResponse::Open(_) | WorkerResponse::Ready => unreachable!(),
+        WorkerResponse::Open(_)
+        | WorkerResponse::Close(_)
+        | WorkerResponse::CloseWorkspace(_)
+        | WorkerResponse::Ready => {
+            unreachable!()
+        }
     }
 }

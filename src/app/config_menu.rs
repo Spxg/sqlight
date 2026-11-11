@@ -4,7 +4,9 @@ use web_sys::Event;
 
 use crate::app::{
     GlobalState, GlobalStateStoreFields, Orientation, Theme,
-    config_element::Select as SelectConfig, menu_group::MenuGroup,
+    config_element::{ConfigElement, Select as SelectConfig},
+    menu_aside::MenuAside,
+    menu_group::MenuGroup,
 };
 
 const ACE_KEYBOARDS: [&str; 5] = ["ace", "emacs", "sublime", "vim", "vscode"];
@@ -57,6 +59,17 @@ pub fn ConfigMenu() -> impl IntoView {
             >
                 {options(ACE_THEMES)}
             </SelectConfig>
+            <ConfigElement name="Run Selected SQL".into()>
+                <input
+                    type="checkbox"
+                    aria-label="Run Selected SQL"
+                    prop:checked=move || state.run_selected_sql().get()
+                    on:change=move |event| {
+                        state.run_selected_sql().set(event_target_checked(&event));
+                    }
+                />
+            </ConfigElement>
+            <MenuAside>"Run the selection when SQL is selected in the editor."</MenuAside>
         </MenuGroup>
 
         <MenuGroup title="UI".into()>
