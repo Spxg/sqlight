@@ -1,6 +1,3 @@
-import { sqlightInitializationMarker } from './snippets/sqlight-3486dec0052f4608/inline0.js';
-
-
 export class IntoUnderlyingByteSource {
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
@@ -548,10 +545,6 @@ function __wbg_get_imports() {
         __wbg_set_onmessage_4565eb0ef03ee0f9: function(arg0, arg1) {
             arg0.onmessage = arg1;
         },
-        __wbg_sqlightInitializationMarker_440da6df5208b3cd: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4) {
-            const ret = sqlightInitializationMarker(getStringFromWasm0(arg0, arg1), getStringFromWasm0(arg2, arg3), arg4 !== 0);
-            return ret;
-        }, arguments); },
         __wbg_stack_575c4e0918581b9c: function(arg0, arg1) {
             const ret = arg1.stack;
             const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
