@@ -1,0 +1,1 @@
+import init from './sqlcipher.js';await init();
