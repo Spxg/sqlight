@@ -59,7 +59,12 @@ pub fn ConfigMenu() -> impl IntoView {
             >
                 {options(ACE_THEMES)}
             </SelectConfig>
-            <ConfigElement name="Run Selected SQL".into()>
+            <ConfigElement
+                name="Run Selected SQL".into()
+                aside=Some(view! {
+                    <MenuAside>"Run the selection when SQL is selected in the editor."</MenuAside>
+                }.into_any())
+            >
                 <input
                     type="checkbox"
                     aria-label="Run Selected SQL"
@@ -69,7 +74,6 @@ pub fn ConfigMenu() -> impl IntoView {
                     }
                 />
             </ConfigElement>
-            <MenuAside>"Run the selection when SQL is selected in the editor."</MenuAside>
         </MenuGroup>
 
         <MenuGroup title="UI".into()>

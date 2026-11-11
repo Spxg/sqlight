@@ -64,7 +64,7 @@ impl SQLiteWorker {
     }
 
     async fn open(&mut self, options: OpenOptions) -> Result<()> {
-        validate_filename(&options.filename)?;
+        validate_filename(&options.filename).map_err(WorkerError::LoadDb)?;
         if self.options.as_ref().is_some_and(|current| {
             current.filename == options.filename && current.read_only == options.read_only
         }) && self.db.is_some()
@@ -240,11 +240,8 @@ impl SQLiteWorker {
         let mut names = HashSet::new();
         let mut files = Vec::new();
         for file in options.files {
-            validate_filename(&file.filename)?;
-            if ["-journal", "-wal", "-shm"]
-                .iter()
-                .any(|suffix| file.filename.ends_with(suffix))
-            {
+            validate_filename(&file.filename).map_err(WorkerError::LoadDb)?;
+            if is_sidecar(&file.filename) {
                 return Err(WorkerError::LoadDb(
                     "Upload main database files, without journal or WAL suffixes".into(),
                 ));
@@ -295,6 +292,32 @@ impl SQLiteWorker {
         result
     }
 
+    async fn create_db(&self, filename: String) -> Result<String> {
+        self.ensure_autocommit()?;
+        validate_filename(&filename).map_err(WorkerError::CreateDb)?;
+        if is_sidecar(&filename) {
+            return Err(WorkerError::CreateDb(
+                "Choose a main database filename, without journal or WAL suffixes".into(),
+            ));
+        }
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            if self.contains(&format!("{filename}{suffix}"))? {
+                return Err(WorkerError::CreateDb(format!(
+                    "Database already exists: {filename}"
+                )));
+            }
+        }
+        self.reserve_opfs(3).await?;
+        let mut options = self.options.as_ref().ok_or(WorkerError::NotOpened)?.clone();
+        options.filename = filename.clone();
+        // The active connection keeps its key and SQL state while only the new file is opened.
+        if let Err(error) = initialize_empty_db(&options) {
+            self.remove_files(&filename)?;
+            return Err(WorkerError::CreateDb(error.to_string()));
+        }
+        Ok(filename)
+    }
+
     fn list_dbs(&self) -> Result<Vec<String>> {
         self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         let mut names = self
@@ -303,11 +326,7 @@ impl SQLiteWorker {
             .unwrap()
             .names()
             .map_err(|error| WorkerError::LoadDb(error.to_string()))?;
-        names.retain(|name| {
-            !["-journal", "-wal", "-shm"]
-                .iter()
-                .any(|suffix| name.ends_with(suffix))
-        });
+        names.retain(|name| !is_sidecar(name));
         names.sort();
         Ok(names)
     }
@@ -341,7 +360,7 @@ impl SQLiteWorker {
     }
 
     fn download_file(&self, filename: &str) -> Result<DownloadDbResponse> {
-        validate_filename(filename)?;
+        validate_filename(filename).map_err(WorkerError::DownloadDb)?;
         self.options.as_ref().ok_or(WorkerError::NotOpened)?;
         if let Some(db) = &self.db
             && let Some((schema, read_only)) = db.file_schema(filename, OPFS_VFS)
@@ -464,14 +483,18 @@ fn validate_import_db(
     Ok(())
 }
 
-fn validate_filename(filename: &str) -> Result<()> {
+fn validate_filename(filename: &str) -> std::result::Result<(), String> {
     if filename.is_empty() || matches!(filename, "." | "..") || filename.contains(['\0', '/', '\\'])
     {
-        return Err(WorkerError::LoadDb(
-            "Choose a nonempty database filename without directory separators".into(),
-        ));
+        return Err("Choose a nonempty database filename without directory separators".into());
     }
     Ok(())
+}
+
+fn is_sidecar(filename: &str) -> bool {
+    ["-journal", "-wal", "-shm"]
+        .iter()
+        .any(|suffix| filename.ends_with(suffix))
 }
 
 async fn execute_tasks(
@@ -491,6 +514,9 @@ async fn execute_tasks(
             WorkerRequest::LoadDb(options) => WorkerResponse::LoadDb(worker.load_db(options).await),
             WorkerRequest::LoadDbs(options) => {
                 WorkerResponse::LoadDbs(worker.load_dbs(options).await)
+            }
+            WorkerRequest::CreateDb(filename) => {
+                WorkerResponse::CreateDb(worker.create_db(filename).await)
             }
             WorkerRequest::ListDbs => WorkerResponse::ListDbs(worker.list_dbs()),
             WorkerRequest::DownloadDb => WorkerResponse::DownloadDb(worker.download_db()),

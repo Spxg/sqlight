@@ -4,7 +4,7 @@ use reactive_stores::Store;
 use web_sys::Event;
 
 use crate::{
-    WorkerRequest,
+    SQLightError, WorkerError, WorkerRequest,
     app::{
         Engine, GlobalState, GlobalStateStoreFields,
         button_set::{Button, ButtonSet},
@@ -26,10 +26,17 @@ istyles!(
 pub fn WorkspaceMenu() -> impl IntoView {
     let state = expect_context::<Store<GlobalState>>();
     let name = RwSignal::new(state.workspace_name().get_untracked());
+    let database_name = RwSignal::new(String::new());
     let busy = Signal::derive(move || state.is_busy().get());
     let refreshed = StoredValue::new(None::<(String, Engine)>);
 
     Effect::new(move || name.set(state.workspace_name().get()));
+    Effect::new(move || {
+        let database = state.database().get();
+        if database_name.get_untracked().trim() == database {
+            database_name.set(String::new());
+        }
+    });
     Effect::new(move || {
         let key = (state.workspace_id().get(), state.engine().get());
         if !busy.get() && refreshed.get_value().as_ref() != Some(&key) {
@@ -38,6 +45,19 @@ pub fn WorkspaceMenu() -> impl IntoView {
             send_request(state, WorkerRequest::ListDbs);
         }
     });
+
+    let create_database = move || {
+        let filename = database_name.get_untracked().trim().to_owned();
+        if !busy.get_untracked() && !filename.is_empty() {
+            send_request(state, WorkerRequest::CreateDb(filename));
+        }
+    };
+    let create_error = move || {
+        state.last_error().with(|error| match error.as_deref() {
+            Some(SQLightError::Worker(WorkerError::CreateDb(message))) => Some(message.clone()),
+            _ => None,
+        })
+    };
 
     let options = move || {
         let mut workspaces = vec![(state.workspace_id().get(), state.workspace_name().get())];
@@ -126,7 +146,7 @@ pub fn WorkspaceMenu() -> impl IntoView {
                 </ButtonSet>
             </div>
             <MenuAside>
-                "Workspaces keep separate SQL and settings and share database files. Deleting one removes its SQL and settings and keeps all database files."
+                "Workspaces save SQL and connection settings. Deleting one keeps all database files."
             </MenuAside>
         </MenuGroup>
         <MenuGroup title="Connection".into()>
@@ -134,6 +154,11 @@ pub fn WorkspaceMenu() -> impl IntoView {
                 name="Main database".into()
                 value=move || state.database().get()
                 disabled=busy
+                aside=Some(view! {
+                    <MenuAside>
+                        "Choose the main database from files stored persistently in this browser’s OPFS for this site."
+                    </MenuAside>
+                }.into_any())
                 on_change=move |event: Event| {
                     batch(move || {
                         state.database().set(event_target_value(&event));
@@ -143,7 +168,46 @@ pub fn WorkspaceMenu() -> impl IntoView {
             >
                 {databases}
             </Select>
-            <ConfigElement name="Read only".into()>
+            <div class=styles::databaseCreate>
+                <input
+                    type="text"
+                    class=styles::input
+                    aria-label="New database name"
+                    placeholder="New database name"
+                    prop:value=move || database_name.get()
+                    disabled=move || busy.get()
+                    on:input=move |event| database_name.set(event_target_value(&event))
+                    on:keydown=move |event| {
+                        if event.key() == "Enter" {
+                            event.prevent_default();
+                            create_database();
+                        }
+                    }
+                />
+                <ButtonSet>
+                    <Button
+                        is_small=true
+                        disabled=Signal::derive(move || {
+                            busy.get() || database_name.get().trim().is_empty()
+                        })
+                        on_click=move |_| create_database()
+                    >
+                        "Create database"
+                    </Button>
+                </ButtonSet>
+            </div>
+            <MenuAside>"Creates an empty database and selects it as this workspace’s main database."</MenuAside>
+            {move || create_error().map(|message| view! {
+                <p class=styles::databaseError role="alert">{message}</p>
+            })}
+            <ConfigElement
+                name="Read only".into()
+                aside=Some(view! {
+                    <MenuAside>
+                        "Prevents SQL writes while still allowing database creation and file imports."
+                    </MenuAside>
+                }.into_any())
+            >
                 <input
                     type="checkbox"
                     aria-label="Read only"
@@ -154,7 +218,14 @@ pub fn WorkspaceMenu() -> impl IntoView {
                     }
                 />
             </ConfigElement>
-            <ConfigElement name="Fresh database per run".into()>
+            <ConfigElement
+                name="Fresh database per run".into()
+                aside=Some(view! {
+                    <MenuAside>
+                        "Rebuilds the selected main database before each run, affecting every workspace that shares that file."
+                    </MenuAside>
+                }.into_any())
+            >
                 <input
                     type="checkbox"
                     aria-label="Fresh database per run"
@@ -169,6 +240,11 @@ pub fn WorkspaceMenu() -> impl IntoView {
                 name="SQLite Engine".into()
                 value=move || state.engine().get().value().to_owned()
                 disabled=busy
+                aside=Some(view! {
+                    <MenuAside>
+                        "Workspaces using the same engine share files; different engines have separate files."
+                    </MenuAside>
+                }.into_any())
                 on_change=move |event| {
                     state.engine().set(Engine::from_select(&event_target_value(&event)));
                 }
@@ -181,9 +257,6 @@ pub fn WorkspaceMenu() -> impl IntoView {
                     })
                     .collect_view()}
             </Select>
-            <MenuAside>
-                "Databases persist in this browser’s OPFS for this site and are shared by workspaces using the same engine. Fresh database per run rebuilds the selected main file, affecting every workspace that uses it. Read only prevents SQL changes. Both options can be enabled together."
-            </MenuAside>
         </MenuGroup>
     }
 }

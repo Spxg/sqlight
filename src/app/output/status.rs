@@ -50,6 +50,9 @@ fn error_details(error: &SQLightError) -> &'static str {
                 "Enable Fresh database per run to rebuild the selected main database, then run again."
             }
             WorkerError::LoadDb(_) => "Check that the imported file is a SQLite database.",
+            WorkerError::CreateDb(_) => {
+                "Choose an unused database filename. Existing files are not overwritten."
+            }
             WorkerError::DownloadDb(_) => {
                 "Commit or roll back any active transaction, then try downloading again."
             }

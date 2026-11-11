@@ -17,6 +17,8 @@ pub enum WorkerError {
     ActiveTransaction,
     #[error("Failed to load db: {0}")]
     LoadDb(String),
+    #[error("Failed to create db: {0}")]
+    CreateDb(String),
     #[error("Failed to download db: {0}")]
     DownloadDb(String),
     #[error("Worker communication failed: {0}")]
@@ -33,6 +35,7 @@ pub enum WorkerRequest {
     Run(RunOptions),
     LoadDb(LoadDbOptions),
     LoadDbs(LoadDbsOptions),
+    CreateDb(String),
     ListDbs,
     DownloadDb,
     DownloadFile(String),
@@ -47,6 +50,7 @@ pub enum WorkerResponse {
     Run(Result<SQLiteRunResult>),
     LoadDb(Result<()>),
     LoadDbs(Result<Vec<String>>),
+    CreateDb(Result<String>),
     ListDbs(Result<Vec<String>>),
     DownloadDb(Result<DownloadDbResponse>),
 }

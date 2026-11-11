@@ -228,6 +228,24 @@ async function checkWorkerContext(page) {
         }
 
         await sql('PRAGMA query_only=ON; PRAGMA cache_size=-321;');
+        const created = `created sp ace?#%你好-${engine}.db`;
+        if (unwrap(await request({ CreateDb: created })) !== created)
+          throw new Error(`${engine}: CreateDb changed the requested filename`);
+        const createdFile = unwrap(await request({ DownloadFile: created }));
+        if (createdFile.filename !== created || !createdFile.data.length
+          || new TextDecoder().decode(createdFile.data.slice(0, 16)) !== 'SQLite format 3\0') {
+          throw new Error(`${engine}: CreateDb did not initialize a valid downloadable database`);
+        }
+        for (const filename of [created, database.filename]) {
+          const duplicate = await request({ CreateDb: filename });
+          if (!duplicate.CreateDb.Err?.CreateDb)
+            throw new Error(`${engine}: CreateDb accepted an existing database`);
+        }
+        const createdAgain = unwrap(await request({ DownloadFile: created }));
+        if (createdAgain.data.length !== createdFile.data.length
+          || createdAgain.data.some((byte, index) => byte !== createdFile.data[index])) {
+          throw new Error(`${engine}: Duplicate creation changed the existing database`);
+        }
         const downloaded = unwrap(await request({ DownloadFile: database.filename }));
         if (engine !== 'sqlite3') encryptedHeader(downloaded.data);
         const preserved = await sql(`PRAGMA query_only;
@@ -257,6 +275,13 @@ async function checkWorkerContext(page) {
           LoadDbs: { files: [{ filename: companion, data: downloaded.data }], replace: false },
         }));
         await sql(key + 'BEGIN; SELECT value FROM protected;');
+        const blockedCreateName = `readonly-blocked-${engine}.db`;
+        const blockedCreate = await request({ CreateDb: blockedCreateName });
+        if (blockedCreate.CreateDb.Err !== 'ActiveTransaction'
+          || unwrap(await request('ListDbs')).includes(blockedCreateName)
+          || value(await sql('SELECT value FROM protected;'), 'value') !== '321') {
+          throw new Error(`${engine}: Failed CreateDb changed the current transaction or key`);
+        }
         const reset = unwrap(await request({
           Run: {
             sql: `SELECT count(*) AS remaining FROM sqlite_schema;
@@ -313,6 +338,11 @@ async function checkWorkerContext(page) {
         const initialized = unwrap(await request('DownloadDb')).data;
         if (new TextDecoder().decode(initialized.slice(0, 16)) !== 'SQLite format 3\0')
           throw new Error(`${engine}: Empty read-only workspace was not initialized`);
+        unwrap(await request({ Open: { filename: created, read_only: true } }));
+        if (value(await sql('SELECT count(*) AS count FROM sqlite_schema;'), 'count') !== '0')
+          throw new Error(`${engine}: Newly created database did not have an empty schema`);
+        if ((sqliteErrorCode(await request(run('CREATE TABLE forbidden(value);'))) & 0xff) !== 8)
+          throw new Error(`${engine}: Selecting a new database lost the read-only setting`);
       }
 
       async function checkDownloadWal() {
@@ -392,6 +422,11 @@ async function checkWorkerContext(page) {
         const transaction = await request('DownloadDb');
         if (!transaction.DownloadDb.Err)
           throw new Error(`${engine}: Export accepted an uncommitted transaction`);
+        const transactionCreate = await request({ CreateDb: 'blocked-create.db' });
+        if (transactionCreate.CreateDb.Err !== 'ActiveTransaction'
+          || unwrap(await request('ListDbs')).includes('blocked-create.db')) {
+          throw new Error(`${engine}: CreateDb did not reject a transaction without creating a file`);
+        }
         for (const options of [
           { filename: 'smoke.db', read_only: true },
           { filename: 'other.db' },
@@ -603,6 +638,25 @@ async function checkWorkerContext(page) {
           unwrap(await request({ Open: source }));
           await sql(`CREATE TABLE shared_data(value);
             INSERT INTO shared_data VALUES (1);`);
+          for (const suffix of ['-journal', '-wal', '-shm']) {
+            const reserved = `reserved-${suffix.slice(1)}.db`;
+            await sql(`ATTACH '${reserved}${suffix}' AS occupied;
+              CREATE TABLE occupied.marker(value); DETACH occupied;`);
+            const before = unwrap(await request({ DownloadFile: `${reserved}${suffix}` })).data;
+            if (!(await request({ CreateDb: reserved })).CreateDb.Err?.CreateDb)
+              throw new Error(`${engine}: CreateDb ignored an existing ${suffix} file`);
+            const after = unwrap(await request({ DownloadFile: `${reserved}${suffix}` })).data;
+            if (before.length !== after.length || before.some((byte, index) => byte !== after[index]))
+              throw new Error(`${engine}: CreateDb changed an existing ${suffix} file`);
+          }
+          const beforeInvalidNames = unwrap(await request('ListDbs'));
+          for (const filename of ['', '.', '..', 'bad/name.db', 'bad\\name.db', 'bad\0name.db',
+            'bad.db-journal', 'bad.db-wal', 'bad.db-shm']) {
+            if (!(await request({ CreateDb: filename })).CreateDb.Err)
+              throw new Error(`${engine}: CreateDb accepted an invalid filename`);
+          }
+          if (JSON.stringify(unwrap(await request('ListDbs'))) !== JSON.stringify(beforeInvalidNames))
+            throw new Error(`${engine}: Invalid CreateDb requests left partial files`);
           const first = unwrap(await request('DownloadDb')).data;
           await sql('UPDATE shared_data SET value=2;');
           const second = unwrap(await request('DownloadDb')).data;

@@ -47,6 +47,24 @@
   gap: 0.5em;
 }
 
+.databaseCreate {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5em;
+  margin: 0.5em 0;
+
+  & input {
+    flex: 1;
+    width: 0;
+  }
+}
+
+.databaseError {
+  margin: 0.5em 0;
+  color: var(--font-color);
+  overflow-wrap: anywhere;
+}
+
 .toggle {
   display: flex;
 

@@ -14,6 +14,7 @@ pub fn Select<E, V>(
     on_change: E,
     value: V,
     name: String,
+    #[prop(default = None)] aside: Option<AnyView>,
     #[prop(optional, into)] disabled: Signal<bool>,
     #[prop(default = Box::new(|| true))] is_default: Box<dyn Fn() -> bool + Send>,
     children: Children,
@@ -24,7 +25,7 @@ where
 {
     let label = name.clone();
     view! {
-        <ConfigElement name=name is_default=is_default>
+        <ConfigElement name=name is_default=is_default aside=aside>
             <select
                 class=styles::select
                 aria-label=label

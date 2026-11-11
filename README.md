@@ -35,6 +35,12 @@ inherit the selected engine, main database, and Read only setting, preserve the
 database between runs, and start with a query listing the schema's tables.
 The initial main database is `default.db`.
 
+Enter a filename in **Workspace → New database name** and choose **Create
+database** to create and select an empty SQLite file. It is available for
+download immediately. Creation turns off Fresh database per run and preserves
+Read only and the SQL draft. Existing filenames are rejected without replacing
+their files.
+
 Configurations using the same engine share database files. Several configurations
 can select `a.db` while keeping different SQL drafts. Renaming or
 deleting a configuration leaves those shared files intact; deleting removes its

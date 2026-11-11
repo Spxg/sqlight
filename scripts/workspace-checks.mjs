@@ -202,6 +202,38 @@ export async function checkWorkspaces(page) {
     await closeMenu();
   }
 
+  async function databaseChoices() {
+    const menu = await workspaceMenu();
+    const names = await menu.getByRole('combobox', { name: 'Main database', exact: true })
+      .locator('option').evaluateAll((options) => options.map((option) => option.value).sort());
+    await closeMenu();
+    return names;
+  }
+
+  async function createDatabase(filename, duplicate = false) {
+    const menu = await workspaceMenu();
+    const name = menu.getByRole('textbox', { name: 'New database name', exact: true });
+    await name.fill(filename);
+    await menu.getByRole('button', { name: 'Create database', exact: true }).click();
+    if (duplicate) {
+      await workspacePage.getByRole('tab', { name: 'Status', selected: true }).waitFor();
+      await menu.getByRole('alert').filter({
+        hasText: `Database already exists: ${filename}`,
+      }).waitFor();
+      assert.equal(await name.inputValue(), filename);
+    } else {
+      await workspacePage.waitForFunction(
+        (filename) => JSON.parse(localStorage.getItem('config'))?.database === filename,
+        filename,
+      );
+      assert.equal(await name.inputValue(), '');
+    }
+    await workspacePage.waitForFunction(() =>
+      !document.querySelector('input[aria-label="Read only"]').disabled,
+    );
+    await closeMenu();
+  }
+
   async function expectSettingChangeRejected() {
     await workspacePage.getByRole('tab', { name: 'Status', selected: true }).waitFor();
     await workspacePage.getByText(
@@ -224,6 +256,54 @@ export async function checkWorkspaces(page) {
     await run(`CREATE TABLE customers(id INTEGER PRIMARY KEY, name TEXT);
       INSERT INTO customers VALUES (1, 'Alice'), (2, 'Bob');`);
     const customersDatabase = await download();
+
+    // Creating a file preserves the SQL draft and can keep read-only mode enabled.
+    const creationDraft = 'SELECT 1009 AS preserved_creation_draft;';
+    await edit(creationDraft);
+    await setFreshDatabase(true);
+    await setReadOnly(true);
+    await createDatabase('created.db');
+    const created = await config();
+    assert.equal(created.sql, creationDraft);
+    assert.equal(created.read_only, true);
+    assert.equal(created.keep_ctx, true);
+    await expectDatabase('created.db');
+    const emptyDatabase = await download('created.db');
+    assert.equal(emptyDatabase.subarray(0, 16).toString(), 'SQLite format 3\0');
+
+    const filesBeforeDuplicate = await databaseChoices();
+    await createDatabase(initialDatabase, true);
+    const afterDuplicate = await config();
+    for (const field of ['workspace_id', 'database', 'engine', 'sql', 'read_only', 'keep_ctx']) {
+      assert.equal(afterDuplicate[field], created[field], `Duplicate creation preserves ${field}`);
+    }
+    assert.deepEqual(await databaseChoices(), filesBeforeDuplicate);
+    assert.deepEqual(await download(initialDatabase), customersDatabase);
+
+    await run('PRAGMA compile_options; SELECT count(*) AS empty_schema FROM sqlite_schema;');
+    await expectValue('0');
+    await edit('CREATE TABLE read_only_creation_must_fail(value INTEGER);');
+    await workspacePage.getByRole('button', { name: 'Run', exact: true }).click();
+    await workspacePage.getByRole('tab', { name: 'Status', selected: true }).waitFor();
+    await workspacePage.getByText(/This workspace is read only\./).waitFor();
+    await run(`ATTACH '${initialDatabase}' AS original;
+      SELECT (SELECT count(*) FROM main.sqlite_schema) AS empty_schema,
+        (SELECT count(*) FROM original.customers) AS original_customers;
+      DETACH original;`);
+    assert.deepEqual(await workspacePage.locator('tbody td').allTextContents(), ['0', '2']);
+
+    await createWorkspace('Created database query');
+    const createdQuery = 'SELECT count(*) AS empty_schema FROM sqlite_schema;';
+    await edit(createdQuery);
+    await workspacePage.reload();
+    await workspacePage.waitForFunction(() => globalThis.ace?.edit('ace_editor'));
+    assert.equal((await config()).database, 'created.db');
+    assert.equal((await config()).read_only, true);
+    await run(createdQuery);
+    await expectValue('0');
+    await selectWorkspace('default');
+    await setReadOnly(false);
+    await selectDatabase(initialDatabase);
 
     await run(`ATTACH 'seed-orders.db' AS seed;
       CREATE TABLE seed.orders(customer_id INTEGER, total INTEGER);

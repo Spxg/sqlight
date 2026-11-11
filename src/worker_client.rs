@@ -168,6 +168,9 @@ pub(crate) fn send_request(state: Store<GlobalState>, request: WorkerRequest) {
             Err(WorkerError::ActiveTransaction)
                 | Ok(WorkerResponse::LoadDb(Err(WorkerError::ActiveTransaction)))
                 | Ok(WorkerResponse::LoadDbs(Err(WorkerError::ActiveTransaction)))
+                | Ok(WorkerResponse::CreateDb(Err(
+                    WorkerError::ActiveTransaction
+                )))
         ) && let Some(options) = session.as_ref().and_then(|worker| worker.opened.as_ref())
         {
             batch(move || {
@@ -272,6 +275,21 @@ fn handle_response(state: Store<GlobalState>, response: WorkerResponse, embed_sq
         }
         WorkerResponse::ListDbs(result) => match result {
             Ok(databases) => state.databases().set(databases),
+            Err(error) => state
+                .last_error()
+                .set(Some(SQLightError::new_worker(error))),
+        },
+        WorkerResponse::CreateDb(result) => match result {
+            Ok(filename) => batch(move || {
+                state.database().set(filename.clone());
+                state.keep_ctx().set(true);
+                state.databases().update(|databases| {
+                    if !databases.contains(&filename) {
+                        databases.push(filename);
+                        databases.sort();
+                    }
+                });
+            }),
             Err(error) => state
                 .last_error()
                 .set(Some(SQLightError::new_worker(error))),
