@@ -4,4 +4,12 @@ command = "npm"
 command_arguments = ["run", "assets"]
 
 [watch]
-ignore = ["assets/generated", "assets/module.postcss", "node_modules"]
+# Match both directories and their contents so generated assets cannot trigger builds.
+ignore = [
+    "assets/generated",
+    "assets/generated/**",
+    "assets/module.postcss",
+    "assets/module.postcss/**",
+    "node_modules",
+    "node_modules/**",
+]
